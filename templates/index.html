@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h2>Assess a Product</h2>
+    <p style="margin-bottom: 1.5rem; color: #666;">
+        Enter a product name, vendor, or URL to generate a comprehensive security assessment.
+    </p>
+    
+    <form id="assessmentForm">
+        <div class="form-group">
+            <label for="input_text">Product Name, Vendor, or URL</label>
+            <input 
+                type="text" 
+                id="input_text" 
+                name="input_text" 
+                placeholder="e.g., Slack, Microsoft Teams, https://example.com"
+                required
+            >
+        </div>
+        
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="use_cache" name="use_cache" checked>
+                Use cached results (if available within 24 hours)
+            </label>
+        </div>
+        
+        <button type="submit" id="submitBtn">Generate Assessment</button>
+    </form>
+</div>
+
+<div id="loading" class="loading">
+    <div class="spinner"></div>
+    <p>Analyzing security posture... This may take 30-60 seconds.</p>
+</div>
+
+<div id="results" style="display: none;">
+    <div class="card">
+        <h2>Assessment Results</h2>
+        <div id="resultsContent"></div>
+    </div>
+</div>
+
+<div id="errorMsg"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('assessmentForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const inputText = document.getElementById('input_text').value.trim();
+    const useCache = document.getElementById('use_cache').checked;
+    const submitBtn = document.getElementById('submitBtn');
+    const loading = document.getElementById('loading');
+    const results = document.getElementById('results');
+    const errorMsg = document.getElementById('errorMsg');
+    
+    // Clear previous results
+    results.style.display = 'none';
+    errorMsg.innerHTML = '';
+    
+    // Show loading
+    loading.classList.add('active');
+    submitBtn.disabled = true;
+    
+    try {
+        const response = await fetch('/assess', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                input_text: inputText,
+                use_cache: useCache
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Assessment failed');
+        }
+        
+        if (data.success && data.assessment) {
+            displayAssessment(data.assessment);
+            results.style.display = 'block';
+        }
+        
+    } catch (error) {
+        errorMsg.innerHTML = `<div class="error">❌ ${error.message}</div>`;
+    } finally {
+        loading.classList.remove('active');
+        submitBtn.disabled = false;
+    }
+});
+
+function displayAssessment(assessment) {
+    const content = document.getElementById('resultsContent');
+    
+    const entity = assessment.entity;
+    const classification = assessment.classification;
+    const security = assessment.security_posture;
+    const trustScore = assessment.trust_score;
+    const alternatives = assessment.alternatives;
+    const recommendations = assessment.recommendations;
+    
+    // Build trust score color
+    const score = trustScore.score;
+    let scoreColor = '#27ae60';
+    if (score < 40) scoreColor = '#c33';
+    else if (score < 60) scoreColor = '#e67e22';
+    else if (score < 75) scoreColor = '#f39c12';
+    
+    let html = `
+        <div style="margin-bottom: 2rem;">
+            <h3>${entity.product_name}</h3>
+            <p><strong>Vendor:</strong> ${entity.vendor}</p>
+            ${entity.url ? `<p><strong>Website:</strong> <a href="${entity.url}" target="_blank">${entity.url}</a></p>` : ''}
+            <p><strong>Category:</strong> ${classification.category} - ${classification.sub_category}</p>
+        </div>
+        
+        <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; margin-bottom: 2rem;">
+            <h3>Trust Score</h3>
+            <div style="font-size: 3rem; font-weight: bold; color: ${scoreColor}; margin: 1rem 0;">
+                ${score}/100
+            </div>
+            <p><strong>Risk Level:</strong> <span class="badge ${trustScore.risk_level}">${trustScore.risk_level.toUpperCase()}</span></p>
+            <p><strong>Confidence:</strong> ${trustScore.confidence}</p>
+            <p style="margin-top: 1rem;">${trustScore.rationale}</p>
+        </div>
+        
+        <div style="margin-bottom: 2rem;">
+            <h3>Security Posture Summary</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px;">
+                    <div style="font-size: 2rem; font-weight: bold; color: #667eea;">${security.vulnerability_summary.total_cves}</div>
+                    <div>Total CVEs</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px;">
+                    <div style="font-size: 2rem; font-weight: bold; color: #c33;">${security.vulnerability_summary.total_kevs}</div>
+                    <div>Known Exploited</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px;">
+                    <div style="font-size: 1.5rem; font-weight: bold; color: #667eea;">${security.vulnerability_summary.trend}</div>
+                    <div>Trend</div>
+                </div>
+                <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px;">
+                    <div style="font-size: 1.5rem; font-weight: bold; color: #e67e22;">${security.vulnerability_summary.exploitation_risk}</div>
+                    <div>Exploitation Risk</div>
+                </div>
+            </div>
+            
+            ${security.vulnerability_summary.critical_findings.length > 0 ? `
+                <div style="background: #fee; padding: 1rem; border-radius: 8px; border-left: 4px solid #c33; margin-top: 1rem;">
+                    <h4>⚠️ Critical Findings</h4>
+                    <ul>
+                        ${security.vulnerability_summary.critical_findings.map(f => `<li>${f}</li>`).join('')}
+                    </ul>
+                </div>
+            ` : ''}
+            
+            ${security.vulnerability_summary.key_concerns.length > 0 ? `
+                <div style="margin-top: 1rem;">
+                    <h4>Key Concerns</h4>
+                    <ul>
+                        ${security.vulnerability_summary.key_concerns.map(c => `<li>${c}</li>`).join('')}
+                    </ul>
+                </div>
+            ` : ''}
+        </div>
+        
+        ${recommendations.length > 0 ? `
+            <div style="margin-bottom: 2rem;">
+                <h3>Recommendations</h3>
+                ${recommendations.map(rec => `
+                    <div style="background: ${rec.priority === 'CRITICAL' ? '#fee' : rec.priority === 'HIGH' ? '#fed' : '#ffc'}; 
+                                padding: 1rem; border-radius: 8px; margin-bottom: 1rem; 
+                                border-left: 4px solid ${rec.priority === 'CRITICAL' ? '#c33' : rec.priority === 'HIGH' ? '#e67e22' : '#f39c12'};">
+                        <strong>${rec.priority}:</strong> ${rec.action}
+                        <br><small>${rec.reason}</small>
+                    </div>
+                `).join('')}
+            </div>
+        ` : ''}
+        
+        ${alternatives.length > 0 ? `
+            <div style="margin-bottom: 2rem;">
+                <h3>Safer Alternatives</h3>
+                ${alternatives.map(alt => `
+                    <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                        <h4>${alt.product_name} (${alt.vendor})</h4>
+                        <p>${alt.rationale}</p>
+                        ${alt.security_advantages.length > 0 ? `
+                            <ul>
+                                ${alt.security_advantages.map(adv => `<li>${adv}</li>`).join('')}
+                            </ul>
+                        ` : ''}
+                    </div>
+                `).join('')}
+            </div>
+        ` : ''}
+        
+        <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; font-size: 0.9rem; color: #666;">
+            <strong>Sources:</strong>
+            ${assessment.sources.map(s => s.name).join(', ')}
+            <br>
+            <strong>Generated:</strong> ${new Date(assessment.metadata.timestamp).toLocaleString()}
+            ${assessment._cached ? `<br><strong>⚡ From Cache:</strong> ${new Date(assessment._cache_timestamp).toLocaleString()}` : ''}
+        </div>
+    `;
+    
+    content.innerHTML = html;
+}
+</script>
+{% endblock %}

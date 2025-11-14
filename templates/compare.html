@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h2>Compare Products</h2>
+    <p style="margin-bottom: 1.5rem; color: #666;">
+        Compare security assessments of multiple products side-by-side
+    </p>
+    
+    <form id="compareForm">
+        <div class="form-group">
+            <label for="product1">Product 1</label>
+            <input type="text" id="product1" name="product1" placeholder="e.g., Slack" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="product2">Product 2</label>
+            <input type="text" id="product2" name="product2" placeholder="e.g., Microsoft Teams" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="product3">Product 3 (optional)</label>
+            <input type="text" id="product3" name="product3" placeholder="e.g., Discord">
+        </div>
+        
+        <button type="submit" id="compareBtn">Compare Products</button>
+    </form>
+</div>
+
+<div id="loading" class="loading">
+    <div class="spinner"></div>
+    <p>Generating comparative analysis...</p>
+</div>
+
+<div id="comparison" style="display: none;">
+    <div class="card">
+        <h2>Comparison Results</h2>
+        <div id="comparisonContent"></div>
+    </div>
+</div>
+
+<div id="errorMsg"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('compareForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const product1 = document.getElementById('product1').value.trim();
+    const product2 = document.getElementById('product2').value.trim();
+    const product3 = document.getElementById('product3').value.trim();
+    
+    const products = [product1, product2];
+    if (product3) products.push(product3);
+    
+    const compareBtn = document.getElementById('compareBtn');
+    const loading = document.getElementById('loading');
+    const comparison = document.getElementById('comparison');
+    const errorMsg = document.getElementById('errorMsg');
+    
+    comparison.style.display = 'none';
+    errorMsg.innerHTML = '';
+    loading.classList.add('active');
+    compareBtn.disabled = true;
+    
+    try {
+        // Fetch assessments for all products
+        const assessments = await Promise.all(
+            products.map(async (product) => {
+                const response = await fetch('/assess', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        input_text: product,
+                        use_cache: true
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to assess ${product}: ${data.error}`);
+                }
+                
+                return data.assessment;
+            })
+        );
+        
+        displayComparison(assessments);
+        comparison.style.display = 'block';
+        
+    } catch (error) {
+        errorMsg.innerHTML = `<div class="error">❌ ${error.message}</div>`;
+    } finally {
+        loading.classList.remove('active');
+        compareBtn.disabled = false;
+    }
+});
+
+function displayComparison(assessments) {
+    const content = document.getElementById('comparisonContent');
+    
+    let html = `
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 2rem;">
+            <thead>
+                <tr style="background: #f8f9fa;">
+                    <th style="padding: 1rem; text-align: left;">Metric</th>
+                    ${assessments.map(a => `<th style="padding: 1rem; text-align: center;">${a.entity.product_name}</th>`).join('')}
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="border-bottom: 1px solid #e1e8ed;">
+                    <td style="padding: 1rem; font-weight: 600;">Trust Score</td>
+                    ${assessments.map(a => {
+                        const score = a.trust_score.score;
+                        let color = '#27ae60';
+                        if (score < 40) color = '#c33';
+                        else if (score < 60) color = '#e67e22';
+                        else if (score < 75) color = '#f39c12';
+                        return `<td style="padding: 1rem; text-align: center; font-size: 1.5rem; font-weight: bold; color: ${color};">${score}/100</td>`;
+                    }).join('')}
+                </tr>
+                <tr style="border-bottom: 1px solid #e1e8ed;">
+                    <td style="padding: 1rem; font-weight: 600;">Risk Level</td>
+                    ${assessments.map(a => `<td style="padding: 1rem; text-align: center;"><span class="badge ${a.trust_score.risk_level}">${a.trust_score.risk_level.toUpperCase()}</span></td>`).join('')}
+                </tr>
+                <tr style="border-bottom: 1px solid #e1e8ed;">
+                    <td style="padding: 1rem; font-weight: 600;">Vendor</td>
+                    ${assessments.map(a => `<td style="padding: 1rem; text-align: center;">${a.entity.vendor}</td>`).join('')}
+                </tr>
+                <tr style="border-bottom: 1px solid #e1e8ed;">
+                    <td style="padding: 1rem; font-weight: 600;">Category</td>
+                    ${assessments.map(a => `<td style="padding: 1rem; text-align: center;">${a.classification.category}</td>`).join('')}
+                </tr>
+                <tr style="border-bottom: 1px solid #e1e8ed;">
+                    <td style="padding: 1rem; font-weight: 600;">Total CVEs</td>
+                    ${assessments.map(a => `<td style="padding: 1rem; text-align: center;">${a.security_posture.vulnerability_summary.total_cves}</td>`).join('')}
+                </tr>
+                <tr style="border-bottom: 1px solid #e1e8ed;">
+                    <td style="padding: 1rem; font-weight: 600;">Known Exploited (KEV)</td>
+                    ${assessments.map(a => `<td style="padding: 1rem; text-align: center; color: ${a.security_posture.vulnerability_summary.total_kevs > 0 ? '#c33' : '#27ae60'};">${a.security_posture.vulnerability_summary.total_kevs}</td>`).join('')}
+                </tr>
+                <tr style="border-bottom: 1px solid #e1e8ed;">
+                    <td style="padding: 1rem; font-weight: 600;">Vulnerability Trend</td>
+                    ${assessments.map(a => `<td style="padding: 1rem; text-align: center;">${a.security_posture.vulnerability_summary.trend}</td>`).join('')}
+                </tr>
+                <tr style="border-bottom: 1px solid #e1e8ed;">
+                    <td style="padding: 1rem; font-weight: 600;">Exploitation Risk</td>
+                    ${assessments.map(a => `<td style="padding: 1rem; text-align: center;">${a.security_posture.vulnerability_summary.exploitation_risk}</td>`).join('')}
+                </tr>
+            </tbody>
+        </table>
+        
+        <div style="margin-top: 2rem;">
+            <h3>Detailed Analysis</h3>
+            ${assessments.map((a, idx) => `
+                <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; margin-bottom: 1rem;">
+                    <h4>${a.entity.product_name} (${a.entity.vendor})</h4>
+                    <p><strong>Trust Score Rationale:</strong> ${a.trust_score.rationale}</p>
+                    ${a.security_posture.vulnerability_summary.key_concerns.length > 0 ? `
+                        <p><strong>Key Concerns:</strong></p>
+                        <ul>
+                            ${a.security_posture.vulnerability_summary.key_concerns.map(c => `<li>${c}</li>`).join('')}
+                        </ul>
+                    ` : ''}
+                    ${a.recommendations.length > 0 ? `
+                        <p><strong>Top Recommendation:</strong> ${a.recommendations[0].action}</p>
+                    ` : ''}
+                </div>
+            `).join('')}
+        </div>
+        
+        <div style="background: #e7f3ff; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #667eea; margin-top: 2rem;">
+            <h4>💡 Recommendation</h4>
+            <p>Based on the comparison:</p>
+            ${(() => {
+                const sorted = [...assessments].sort((a, b) => b.trust_score.score - a.trust_score.score);
+                return `<p><strong>${sorted[0].entity.product_name}</strong> has the highest trust score (${sorted[0].trust_score.score}/100) and is recommended as the safest option among the compared products.</p>`;
+            })()}
+        </div>
+    `;
+    
+    content.innerHTML = html;
+}
+</script>
+{% endblock %}
