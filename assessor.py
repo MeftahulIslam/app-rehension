@@ -20,7 +20,10 @@ class SecurityAssessor:
         
         # Initialize components
         self.product_hunt = ProductHuntAPI(config.PRODUCTHUNT_API_KEY) if config.PRODUCTHUNT_API_KEY else None
-        self.opencve = OpenCVEAPI()
+        self.opencve = OpenCVEAPI(
+            username=config.OPENCVE_USERNAME,
+            password=config.OPENCVE_PASSWORD
+        )
         self.cisa_kev = CISAKEVAPI()
         self.analyzer = GeminiAnalyzer(config.GEMINI_API_KEY, config.GEMINI_MODEL)
         self.cache = AssessmentCache(config.DATABASE_PATH)

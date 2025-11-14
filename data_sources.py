@@ -115,60 +115,123 @@ class ProductHuntAPI:
 
 
 class OpenCVEAPI:
-    """Fetch CVE information from OpenCVE API"""
+    """Fetch CVE information from OpenCVE API with Basic Authentication"""
     
-    def __init__(self):
-        self.base_url = "https://www.opencve.io/api"
+    def __init__(self, username: Optional[str] = None, password: Optional[str] = None):
+        self.base_url = "https://app.opencve.io/api"
+        self.username = username
+        self.password = password
+        self.auth = (username, password) if username and password else None
+        
+        if not self.auth:
+            logger.warning("OpenCVE credentials not provided - API access may be limited")
         
     def search_cves(self, vendor: str, product: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-        """Search for CVEs by vendor and optionally product"""
+        """Search for CVEs by vendor and optionally product using /cve endpoint"""
         
         try:
-            # Search for vendor first
-            cves = []
-            params = {
-                "vendor": vendor.lower(),
-                "sort": "cvss",
-                "order": "desc"
-            }
+            all_cves = []
+            page = 1
+            max_pages = 10  # Limit to prevent excessive API calls
             
-            if product:
-                params["product"] = product.lower()
+            # Extract clean vendor name (remove common suffixes)
+            clean_vendor = self._extract_vendor_keyword(vendor)
+            clean_product = self._extract_vendor_keyword(product) if product else None
             
-            response = requests.get(
-                f"{self.base_url}/cve",
-                params=params,
-                timeout=10
-            )
+            # Build query parameters - use product if available, otherwise use vendor
+            params = {}
             
-            if response.status_code == 200:
-                data = response.json()
-                cves = data if isinstance(data, list) else []
-                
-                # Limit results
-                cves = cves[:limit]
-                
-                # Format CVE data
-                return [self._format_cve_data(cve) for cve in cves]
+            if clean_product:
+                # If product is specified, only search by product
+                params["product"] = clean_product
+                search_term = f"product={clean_product}"
             else:
-                logger.warning(f"OpenCVE API returned status {response.status_code}")
-                return []
+                # Otherwise search by vendor
+                params["vendor"] = clean_vendor
+                search_term = f"vendor={clean_vendor}"
+            
+            headers = {"Accept": "application/json"}
+            
+            logger.info(f"Searching OpenCVE with {search_term}")
+            
+            while len(all_cves) < limit and page <= max_pages:
+                params["page"] = page
+                
+                response = requests.get(
+                    f"{self.base_url}/cve",
+                    params=params,
+                    auth=self.auth,
+                    headers=headers,
+                    timeout=15
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    if isinstance(data, dict) and 'results' in data:
+                        results = data.get('results', [])
+                        
+                        if not results:
+                            logger.info("No more results found")
+                            break
+                        
+                        all_cves.extend(results)
+                        logger.info(f"Fetched {len(results)} CVEs from page {page} (total: {len(all_cves)})")
+                        
+                        # Check if there are more pages
+                        if not data.get('next') or len(all_cves) >= limit:
+                            break
+                        
+                        page += 1
+                    else:
+                        logger.warning("Unexpected response format from OpenCVE")
+                        break
+                        
+                elif response.status_code == 401:
+                    logger.error("OpenCVE authentication failed - check username and password")
+                    return []
+                elif response.status_code == 404:
+                    logger.info("No results found or reached end of pages")
+                    break
+                else:
+                    logger.warning(f"OpenCVE API returned status {response.status_code}")
+                    break
+            
+            # Limit results to requested amount
+            all_cves = all_cves[:limit]
+            logger.info(f"Total CVEs returned: {len(all_cves)}")
+            
+            # Format CVE data
+            formatted_cves = [self._format_cve_data(cve, detailed=False) for cve in all_cves]
+            return formatted_cves
                 
         except Exception as e:
-            logger.error(f"Error fetching from OpenCVE: {e}")
+            logger.error(f"Error fetching from OpenCVE: {e}", exc_info=True)
             return []
     
     def get_cve_details(self, cve_id: str) -> Optional[Dict[str, Any]]:
-        """Get detailed information about a specific CVE"""
+        """Get detailed information about a specific CVE using /cve/<id> endpoint"""
         
         try:
+            headers = {"Accept": "application/json"}
+            
+            logger.info(f"Fetching details for {cve_id}")
+            
             response = requests.get(
                 f"{self.base_url}/cve/{cve_id}",
+                auth=self.auth,
+                headers=headers,
                 timeout=10
             )
             
             if response.status_code == 200:
-                return self._format_cve_data(response.json())
+                return self._format_cve_data(response.json(), detailed=True)
+            elif response.status_code == 401:
+                logger.error("OpenCVE authentication failed - check username and password")
+                return None
+            elif response.status_code == 404:
+                logger.warning(f"CVE {cve_id} not found")
+                return None
             else:
                 logger.warning(f"OpenCVE API returned status {response.status_code} for CVE {cve_id}")
                 return None
@@ -177,21 +240,111 @@ class OpenCVEAPI:
             logger.error(f"Error fetching CVE details: {e}")
             return None
     
-    def _format_cve_data(self, cve: Dict) -> Dict[str, Any]:
-        """Format CVE data"""
-        return {
-            "cve_id": cve.get('id'),
-            "summary": cve.get('summary'),
-            "cvss_v3": cve.get('cvss', {}).get('v3'),
-            "cvss_v2": cve.get('cvss', {}).get('v2'),
-            "severity": cve.get('cvss', {}).get('v3_severity') or cve.get('cvss', {}).get('v2_severity'),
+    def _extract_vendor_keyword(self, name: str) -> str:
+        """Extract the core vendor/product keyword from a full company name"""
+        if not name:
+            return ""
+        
+        name_lower = name.lower().strip()
+        
+        # List of common suffixes to remove
+        suffixes_to_remove = [
+            ' inc.', ' inc', ' incorporated',
+            ' llc', ' ltd', ' ltd.',
+            ' corporation', ' corp', ' corp.',
+            ' company', ' co', ' co.',
+            ' limited',
+            ' labs',
+            ' technologies', ' technology', ' tech',
+            ' software',
+            ' systems',
+            ' solutions',
+            ' group',
+            ' international',
+            ' enterprises',
+            ' holdings'
+        ]
+        
+        # Remove suffixes
+        for suffix in suffixes_to_remove:
+            if name_lower.endswith(suffix):
+                name_lower = name_lower[:-len(suffix)].strip()
+                break  # Only remove one suffix
+        
+        # Remove common prefixes
+        prefixes_to_remove = ['the ']
+        for prefix in prefixes_to_remove:
+            if name_lower.startswith(prefix):
+                name_lower = name_lower[len(prefix):].strip()
+        
+        # Take the first word if multiple words remain (e.g., "notion labs" -> "notion")
+        words = name_lower.split()
+        if len(words) > 1:
+            # Keep first word unless it's very generic
+            generic_words = ['open', 'free', 'gnu', 'apache']
+            if words[0] not in generic_words:
+                return words[0]
+        
+        return name_lower
+    
+    def _format_cve_data(self, cve: Dict, detailed: bool = False) -> Dict[str, Any]:
+        """Format CVE data from OpenCVE API response"""
+        
+        # Basic fields available in both list and detail views
+        formatted = {
+            "cve_id": cve.get('cve_id'),
+            "summary": cve.get('description', ''),
             "published_date": cve.get('created_at'),
             "updated_date": cve.get('updated_at'),
-            "vendors": cve.get('vendors', []),
-            "cwes": cve.get('cwes', []),
-            "references": cve.get('references', [])[:5],  # Limit references
             "source": "OpenCVE"
         }
+        
+        # Additional fields for detailed view
+        if detailed:
+            # Extract CVSS scores from metrics
+            metrics = cve.get('metrics', {})
+            cvss_v3_1 = metrics.get('cvssV3_1', {}).get('data', {})
+            cvss_v3_0 = metrics.get('cvssV3_0', {}).get('data', {})
+            cvss_v2_0 = metrics.get('cvssV2_0', {}).get('data', {})
+            
+            # Get the best CVSS score available
+            cvss_score = cvss_v3_1.get('score') or cvss_v3_0.get('score') or cvss_v2_0.get('score')
+            cvss_vector = cvss_v3_1.get('vector') or cvss_v3_0.get('vector') or cvss_v2_0.get('vector')
+            
+            # Determine severity
+            severity = None
+            if cvss_score:
+                if cvss_score >= 9.0:
+                    severity = "CRITICAL"
+                elif cvss_score >= 7.0:
+                    severity = "HIGH"
+                elif cvss_score >= 4.0:
+                    severity = "MEDIUM"
+                else:
+                    severity = "LOW"
+            
+            formatted.update({
+                "title": cve.get('title', ''),
+                "cvss_v3": cvss_score,
+                "cvss_vector": cvss_vector,
+                "cvss_v2": cvss_v2_0.get('score'),
+                "severity": severity,
+                "vendors": cve.get('vendors', []),
+                "cwes": cve.get('weaknesses', []),
+                "metrics": metrics
+            })
+        else:
+            # For list view, we don't have full metrics, so set defaults
+            formatted.update({
+                "cvss_v3": None,
+                "cvss_v2": None,
+                "cvss_vector": None,
+                "severity": None,
+                "vendors": [],
+                "cwes": []
+            })
+        
+        return formatted
 
 
 class CISAKEVAPI:
