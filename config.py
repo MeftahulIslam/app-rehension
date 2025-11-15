@@ -33,5 +33,8 @@ class Config:
     GEMINI_TEMPERATURE = 0.1  # Low temperature for consistent, factual responses
     GEMINI_MAX_TOKENS = 4096
     
+    # Multi-Agent Settings
+    USE_MULTI_AGENT = os.getenv('USE_MULTI_AGENT', 'True').lower() == 'true'  # Enable multi-agent verification by default
+    
     # Cache settings
     CACHE_EXPIRY_HOURS = 24

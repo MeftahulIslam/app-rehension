@@ -640,6 +640,7 @@ Assess:
 2. Security disclosure policy
 3. Security team visibility
 4. Patch management track record
+5. Provide the source of the information used for the assessment.
 
 Respond in JSON format:
 {{
@@ -648,7 +649,8 @@ Respond in JSON format:
     "disclosure_policy": true|false|null,
     "security_team_visible": true|false|null,
     "patch_cadence": "regular|irregular|unknown",
-    "summary": "brief assessment"
+    "summary": "brief assessment",
+    "evidence_refs": "references"
 }}"""
         
         try:

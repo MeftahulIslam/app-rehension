@@ -194,6 +194,80 @@
             color: #27ae60;
         }
         
+        /* Progress stages styling */
+        .progress-stage {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem;
+            margin: 0.5rem 0;
+            border-radius: 6px;
+            background: #f8f9fa;
+            border-left: 4px solid #ddd;
+            transition: all 0.3s ease;
+        }
+        
+        .progress-stage.in_progress {
+            background: #e3f2fd;
+            border-left-color: #2196f3;
+            animation: pulse 2s infinite;
+        }
+        
+        .progress-stage.completed {
+            background: #e8f5e9;
+            border-left-color: #4caf50;
+        }
+        
+        .progress-stage.failed {
+            background: #ffebee;
+            border-left-color: #f44336;
+        }
+        
+        .progress-icon {
+            font-size: 1.5rem;
+            margin-right: 1rem;
+            min-width: 2rem;
+            text-align: center;
+        }
+        
+        .progress-label {
+            flex-grow: 1;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .progress-status {
+            font-size: 0.85rem;
+            color: #666;
+            text-transform: uppercase;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            background: white;
+        }
+        
+        .progress-stage.in_progress .progress-status {
+            background: #2196f3;
+            color: white;
+        }
+        
+        .progress-stage.completed .progress-status {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .progress-stage.failed .progress-status {
+            background: #f44336;
+            color: white;
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.8;
+            }
+        }
+        
         footer {
             text-align: center;
             padding: 2rem 0;

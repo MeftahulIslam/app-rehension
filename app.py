@@ -1,9 +1,11 @@
 """
 Flask web application for Security Assessor
 """
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
 import logging
 import json
+import queue
+import threading
 from datetime import datetime
 
 from config import Config
@@ -29,6 +31,11 @@ except Exception as e:
     logger.error(f"Failed to initialize Security Assessor: {e}")
     assessor = None
 
+# Store progress queues for each assessment (keyed by session ID)
+progress_queues = {}
+# Store completed results (keyed by session ID)
+completed_results = {}
+
 
 @app.route('/')
 def index():
@@ -49,12 +56,13 @@ def assess():
         # Get input
         data = request.get_json() if request.is_json else request.form
         input_text = data.get('input_text', '').strip()
-        use_cache = data.get('use_cache', 'true') == 'true' 
+        use_cache = data.get('use_cache', 'true') == 'true'
+        session_id = data.get('session_id', str(datetime.now().timestamp()))
         
         if not input_text:
             return jsonify({'error': 'Please provide a product name, vendor, SHA1 hash, or URL'}), 400
         
-        logger.info(f"Assessment request for: {input_text}")
+        logger.info(f"Assessment request for: {input_text} [session: {session_id}]")
         
         # Parse input to detect format
         parsed = InputParser.parse_input(input_text)
@@ -79,27 +87,121 @@ def assess():
         else:
             assessment_input = input_text
         
-        # Run assessment
-        result = assessor.assess_product(assessment_input, use_cache=use_cache)
+        # Create progress queue for this session
+        progress_queue = queue.Queue()
+        progress_queues[session_id] = progress_queue
         
-        # Add input metadata to result
-        result['_input_metadata'] = {
-            'raw_input': input_text,
-            'parsed_type': parsed['input_type'],
-            'detected_vendor': parsed.get('vendor'),
-            'detected_product': parsed.get('product_name')
-        }
+        # Define progress callback
+        def progress_callback(progress_data):
+            try:
+                progress_queue.put(progress_data)
+            except Exception as e:
+                logger.error(f"Error in progress callback: {e}")
+        
+        # Run assessment in background thread
+        result_container = {}
+        error_container = {}
+        
+        def run_assessment():
+            try:
+                result = assessor.assess_product(
+                    assessment_input, 
+                    use_cache=use_cache,
+                    progress_callback=progress_callback
+                )
+                
+                # Add input metadata to result
+                result['_input_metadata'] = {
+                    'raw_input': input_text,
+                    'parsed_type': parsed['input_type'],
+                    'detected_vendor': parsed.get('vendor'),
+                    'detected_product': parsed.get('product_name')
+                }
+                
+                # Store result for later retrieval
+                completed_results[session_id] = result
+                
+                # Signal completion
+                progress_queue.put({"stage": "complete", "status": "completed", "details": "Assessment finished"})
+            except Exception as e:
+                logger.error(f"Error during assessment: {e}", exc_info=True)
+                error_container['error'] = str(e)
+                progress_queue.put({"stage": "error", "status": "failed", "details": str(e)})
+        
+        assessment_thread = threading.Thread(target=run_assessment)
+        assessment_thread.start()
+        
+        # Return session ID for progress tracking
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'message': 'Assessment started. Connect to /progress/{session_id} for updates.'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting assessment: {e}", exc_info=True)
+        return jsonify({
+            'error': f'Assessment failed: {str(e)}'
+        }), 500
+
+
+@app.route('/progress/<session_id>')
+def progress(session_id):
+    """Server-Sent Events endpoint for progress updates"""
+    
+    def generate():
+        # Get the progress queue for this session
+        progress_queue = progress_queues.get(session_id)
+        
+        if not progress_queue:
+            yield f"data: {json.dumps({'error': 'Session not found'})}\n\n"
+            return
+        
+        try:
+            while True:
+                # Wait for progress update (timeout after 30 seconds)
+                try:
+                    progress_data = progress_queue.get(timeout=30)
+                    
+                    # Send progress update
+                    yield f"data: {json.dumps(progress_data)}\n\n"
+                    
+                    # If complete or error, stop streaming
+                    if progress_data.get('stage') in ['complete', 'error']:
+                        break
+                        
+                except queue.Empty:
+                    # Send keepalive
+                    yield f": keepalive\n\n"
+                    
+        except GeneratorExit:
+            logger.info(f"Client disconnected from progress stream: {session_id}")
+        finally:
+            # Cleanup
+            if session_id in progress_queues:
+                del progress_queues[session_id]
+    
+    return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route('/result/<session_id>')
+def get_result(session_id):
+    """Get the final assessment result"""
+    
+    if session_id in completed_results:
+        result = completed_results[session_id]
+        
+        # Clean up after retrieval
+        del completed_results[session_id]
         
         return jsonify({
             'success': True,
             'assessment': result
         })
-        
-    except Exception as e:
-        logger.error(f"Error during assessment: {e}", exc_info=True)
+    else:
         return jsonify({
-            'error': f'Assessment failed: {str(e)}'
-        }), 500
+            'error': 'Result not found or not yet available'
+        }), 404
 
 
 @app.route('/history')

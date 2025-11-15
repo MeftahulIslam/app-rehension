@@ -2,11 +2,12 @@
 Core assessment engine that orchestrates data gathering and analysis
 """
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 
 from data_sources import ProductHuntAPI, NVDAPI, CISAKEVAPI
 from llm_analyzer import GeminiAnalyzer
+from multi_agent_analyzer import MultiAgentAnalyzer
 from database import AssessmentCache
 from evidence import EvidenceRegistry
 from trust_scorer import TrustScorer
@@ -24,13 +25,25 @@ class SecurityAssessor:
         self.product_hunt = ProductHuntAPI(config.PRODUCTHUNT_API_KEY) if config.PRODUCTHUNT_API_KEY else None
         self.nvd = NVDAPI(api_key=config.NVD_API_KEY)
         self.cisa_kev = CISAKEVAPI()
-        self.analyzer = GeminiAnalyzer(config.GEMINI_API_KEY, config.GEMINI_MODEL)
+        
+        # Initialize analyzer based on configuration
+        self.use_multi_agent = config.USE_MULTI_AGENT
+        
+        if self.use_multi_agent:
+            logger.info("Initializing MULTI-AGENT analyzer (Research + Verification + Synthesis)")
+            self.multi_agent = MultiAgentAnalyzer(config.GEMINI_API_KEY, config.GEMINI_MODEL)
+            self.analyzer = None  # Keep single-agent for fallback
+        else:
+            logger.info("Initializing SINGLE-AGENT analyzer")
+            self.analyzer = GeminiAnalyzer(config.GEMINI_API_KEY, config.GEMINI_MODEL)
+            self.multi_agent = None
+        
         self.cache = AssessmentCache(config.DATABASE_PATH)
         self.trust_scorer = TrustScorer()
         
-        logger.info("SecurityAssessor initialized with NVD API and TrustScorer")
+        logger.info(f"SecurityAssessor initialized with {'MULTI-AGENT' if self.use_multi_agent else 'SINGLE-AGENT'} mode")
     
-    def assess_product(self, input_text: str, use_cache: bool = True) -> Dict[str, Any]:
+    def assess_product(self, input_text: str, use_cache: bool = True, progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """
         Main assessment workflow
         
@@ -43,11 +56,25 @@ class SecurityAssessor:
         """
         logger.info(f"Starting assessment for: {input_text}")
         
+        # Notify initial progress
+        if progress_callback:
+            progress_callback({
+                "stage": "initialization",
+                "status": "in_progress",
+                "details": "Starting assessment workflow..."
+            })
+        
         # Check cache first
         if use_cache:
             cached = self.cache.get_assessment(input_text, max_age_hours=self.config.CACHE_EXPIRY_HOURS)
             if cached:
                 logger.info(f"Returning cached assessment for: {input_text}")
+                if progress_callback:
+                    progress_callback({
+                        "stage": "cache",
+                        "status": "completed",
+                        "details": "Using cached results"
+                    })
                 return cached
         
         # Initialize evidence registry for this assessment
@@ -55,10 +82,28 @@ class SecurityAssessor:
         
         # Step 1: Gather initial data
         logger.info("Step 1: Gathering product information")
+        if progress_callback:
+            progress_callback({
+                "stage": "data_gathering",
+                "status": "in_progress",
+                "details": "Gathering product information..."
+            })
+        
         product_data = self._gather_product_data(input_text)
         
-        # Step 2: Resolve entity
+        # Step 2: Resolve entity (need single-agent for this)
         logger.info("Step 2: Resolving entity identity")
+        if progress_callback:
+            progress_callback({
+                "stage": "entity_resolution",
+                "status": "in_progress",
+                "details": "Resolving product and vendor identity..."
+            })
+        
+        # For entity resolution, use single-agent (quick lookup)
+        if not self.analyzer:
+            self.analyzer = GeminiAnalyzer(self.config.GEMINI_API_KEY, self.config.GEMINI_MODEL)
+        
         entity_info = self.analyzer.resolve_entity(input_text, product_data, evidence_registry)
         
         product_name = entity_info.get('product_name')
@@ -72,7 +117,165 @@ class SecurityAssessor:
         
         # Step 4: Gather security data
         logger.info("Step 4: Gathering security data (CVE, KEV)")
+        if progress_callback:
+            progress_callback({
+                "stage": "security_data",
+                "status": "in_progress",
+                "details": f"Fetching CVE and KEV data for {vendor}..."
+            })
+        
         security_data = self._gather_security_data(vendor, product_name)
+        
+        # Decision point: Use multi-agent or single-agent for analysis
+        if self.use_multi_agent and self.multi_agent:
+            return self._assess_with_multi_agent(
+                input_text=input_text,
+                entity_info=entity_info,
+                classification=classification,
+                product_data=product_data,
+                security_data=security_data,
+                evidence_registry=evidence_registry,
+                progress_callback=progress_callback
+            )
+        else:
+            return self._assess_with_single_agent(
+                input_text=input_text,
+                entity_info=entity_info,
+                classification=classification,
+                product_data=product_data,
+                security_data=security_data,
+                evidence_registry=evidence_registry
+            )
+    
+    def _assess_with_multi_agent(
+        self,
+        input_text: str,
+        entity_info: Dict,
+        classification: Dict,
+        product_data: Dict,
+        security_data: Dict,
+        evidence_registry: EvidenceRegistry,
+        progress_callback: Optional[Callable] = None
+    ) -> Dict[str, Any]:
+        """
+        Multi-agent assessment workflow with research → verification → synthesis
+        """
+        logger.info("Using MULTI-AGENT analysis pipeline")
+        
+        # Use single-agent for structured components (needed for trust scoring)
+        logger.info("Gathering structured analysis components...")
+        
+        security_practices = self.analyzer.analyze_security_practices(
+            entity_info, evidence_registry
+        )
+        
+        incidents_analysis = self.analyzer.analyze_incidents(
+            entity_info, evidence_registry
+        )
+        
+        data_compliance = self.analyzer.analyze_data_compliance(
+            entity_info, evidence_registry
+        )
+        
+        deployment_controls = self.analyzer.analyze_deployment_controls(
+            entity_info, classification, evidence_registry
+        )
+        
+        # Run multi-agent verification analysis on vulnerabilities (most critical)
+        logger.info("Running multi-agent verification on vulnerability analysis...")
+        
+        multi_agent_result = self.multi_agent.analyze_with_verification(
+            entity_info=entity_info,
+            cve_data=security_data['cves'],
+            kev_data=security_data['kevs'],
+            security_practices=security_practices,
+            incidents=incidents_analysis,
+            data_compliance=data_compliance,
+            deployment_controls=deployment_controls,
+            progress_callback=progress_callback
+        )
+        
+        # Extract verified vulnerability analysis from multi-agent result
+        vuln_analysis = multi_agent_result.get('vulnerability_analysis', {})
+        
+        # Fallback to single-agent if multi-agent failed
+        if not vuln_analysis or 'error' in multi_agent_result:
+            logger.warning("Multi-agent analysis incomplete, using single-agent for vulnerabilities")
+            vuln_analysis = self.analyzer.analyze_vulnerabilities(
+                security_data['cves'],
+                security_data['kevs'],
+                evidence_registry
+            )
+        
+        # Calculate rule-based trust score
+        logger.info("Calculating transparent rule-based trust score")
+        
+        scoring_data = {
+            'cves': security_data['cves'],
+            'kevs': security_data['kevs'],
+            'product_data': product_data,
+            'security_practices': security_practices,
+            'incidents': incidents_analysis,
+            'data_compliance': data_compliance
+        }
+        
+        trust_score = self.trust_scorer.calculate_trust_score(scoring_data)
+        
+        # Suggest alternatives
+        logger.info("Suggesting alternatives")
+        alternatives, alt_evidence_refs = self.analyzer.suggest_alternatives(
+            entity_info, classification, trust_score, evidence_registry
+        )
+        
+        # Compile final assessment with multi-agent metadata
+        logger.info("Compiling final multi-agent verified assessment")
+        assessment = self._compile_assessment(
+            entity_info=entity_info,
+            classification=classification,
+            product_data=product_data,
+            security_data=security_data,
+            vuln_analysis=vuln_analysis,
+            security_practices=security_practices,
+            incidents=incidents_analysis,
+            data_compliance=data_compliance,
+            deployment_controls=deployment_controls,
+            trust_score=trust_score,
+            alternatives=alternatives,
+            evidence_registry=evidence_registry
+        )
+        
+        # Add multi-agent metadata
+        assessment['_analysis_mode'] = 'multi-agent'
+        assessment['_multi_agent_metadata'] = multi_agent_result.get('_multi_agent_metadata', {})
+        
+        # Cache the result
+        product_name = entity_info.get('product_name')
+        vendor = entity_info.get('vendor')
+        
+        logger.info("Saving multi-agent assessment to cache")
+        self.cache.save_assessment(
+            product_name=product_name,
+            assessment_data=assessment,
+            vendor=vendor,
+            url=entity_info.get('url')
+        )
+        
+        logger.info(f"Multi-agent assessment complete for: {input_text}")
+        return assessment
+    
+    def _assess_with_single_agent(
+        self,
+        input_text: str,
+        entity_info: Dict,
+        classification: Dict,
+        product_data: Dict,
+        security_data: Dict,
+        evidence_registry: EvidenceRegistry
+    ) -> Dict[str, Any]:
+        """
+        Traditional single-agent assessment workflow
+        """
+        logger.info("Using SINGLE-AGENT analysis")
         
         # Step 5: Analyze vulnerabilities
         logger.info("Step 5: Analyzing vulnerabilities")
@@ -138,7 +341,13 @@ class SecurityAssessor:
             evidence_registry=evidence_registry
         )
         
+        # Add single-agent metadata
+        assessment['_analysis_mode'] = 'single-agent'
+        
         # Cache the result
+        product_name = entity_info.get('product_name')
+        vendor = entity_info.get('vendor')
+        
         logger.info("Saving assessment to cache")
         self.cache.save_assessment(
             product_name=product_name,
@@ -147,7 +356,7 @@ class SecurityAssessor:
             url=entity_info.get('url')
         )
         
-        logger.info(f"Assessment complete for: {input_text}")
+        logger.info(f"Single-agent assessment complete for: {input_text}")
         return assessment
     
     def _gather_product_data(self, input_text: str) -> Optional[Dict[str, Any]]:
