@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.example
+.cache
+.vscode
+README.md
+QUICKSTART.md
+setup.sh
+test_priority.py
+*.db
