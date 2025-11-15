@@ -110,135 +110,110 @@ class ProductHuntAPI:
             "created_at": node.get('createdAt'),
             "topics": topics,
             "makers": makers,
-            "source": "ProductHunt"
+            "source": "ProductHunt",
+            "source_type": "mixed"  # ProductHunt contains both vendor-provided and community data
         }
 
 
-class OpenCVEAPI:
-    """Fetch CVE information from OpenCVE API with Basic Authentication"""
+class NVDAPI:
+    """Fetch CVE information from NVD (National Vulnerability Database) API 2.0"""
     
-    def __init__(self, username: Optional[str] = None, password: Optional[str] = None):
-        self.base_url = "https://app.opencve.io/api"
-        self.username = username
-        self.password = password
-        self.auth = (username, password) if username and password else None
+    def __init__(self, api_key: Optional[str] = None):
+        self.base_url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+        self.api_key = api_key
+        self.headers = {}
         
-        if not self.auth:
-            logger.warning("OpenCVE credentials not provided - API access may be limited")
+        if api_key:
+            self.headers["apiKey"] = api_key
+            logger.info("NVD API initialized with API key (higher rate limits)")
+        else:
+            logger.warning("NVD API key not provided - rate limited to 5 requests per 30 seconds")
         
+        self.last_request_time = 0
+        self.rate_limit_delay = 6 if not api_key else 0.6  # 6 seconds without key, 0.6 with key
+        
+    def _rate_limit(self):
+        """Enforce rate limiting"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.rate_limit_delay:
+            sleep_time = self.rate_limit_delay - time_since_last
+            logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f} seconds")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+    
     def search_cves(self, vendor: str, product: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-        """Search for CVEs by vendor and optionally product using /cve endpoint"""
+        """Search for CVEs by vendor and optionally product using NVD keyword search"""
         
-        try:
-            all_cves = []
-            page = 1
-            max_pages = 10  # Limit to prevent excessive API calls
+        all_cves = []
+        start_index = 0
+        
+        # Clean vendor and product names
+        clean_vendor = self._extract_vendor_keyword(vendor)
+        clean_product = self._extract_vendor_keyword(product) if product else None
+        
+        # Use keyword search (more reliable than CPE matching with wildcards)
+        if clean_product:
+            keyword = clean_product
+            logger.info(f"Searching NVD for product: {clean_product}")
+        else:
+            keyword = clean_vendor
+            logger.info(f"Searching NVD for vendor: {clean_vendor}")
+        
+        # Fetch CVEs in pages
+        while len(all_cves) < limit:
+            self._rate_limit()
             
-            # Extract clean vendor name (remove common suffixes)
-            clean_vendor = self._extract_vendor_keyword(vendor)
-            clean_product = self._extract_vendor_keyword(product) if product else None
+            params = {
+                "keywordSearch": keyword,
+                "resultsPerPage": min(50, limit - len(all_cves)),
+                "startIndex": start_index
+            }
             
-            # Build query parameters - use product if available, otherwise use vendor
-            params = {}
+            response = requests.get(self.base_url, params=params, headers=self.headers, timeout=30)
             
-            if clean_product:
-                # If product is specified, only search by product
-                params["product"] = clean_product
-                search_term = f"product={clean_product}"
-            else:
-                # Otherwise search by vendor
-                params["vendor"] = clean_vendor
-                search_term = f"vendor={clean_vendor}"
+            if response.status_code != 200:
+                logger.warning(f"NVD API returned status {response.status_code}")
+                break
             
-            headers = {"Accept": "application/json"}
+            data = response.json()
+            vulnerabilities = data.get('vulnerabilities', [])
             
-            logger.info(f"Searching OpenCVE with {search_term}")
+            if not vulnerabilities:
+                break
             
-            while len(all_cves) < limit and page <= max_pages:
-                params["page"] = page
-                
-                response = requests.get(
-                    f"{self.base_url}/cve",
-                    params=params,
-                    auth=self.auth,
-                    headers=headers,
-                    timeout=15
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    if isinstance(data, dict) and 'results' in data:
-                        results = data.get('results', [])
-                        
-                        if not results:
-                            logger.info("No more results found")
-                            break
-                        
-                        all_cves.extend(results)
-                        logger.info(f"Fetched {len(results)} CVEs from page {page} (total: {len(all_cves)})")
-                        
-                        # Check if there are more pages
-                        if not data.get('next') or len(all_cves) >= limit:
-                            break
-                        
-                        page += 1
-                    else:
-                        logger.warning("Unexpected response format from OpenCVE")
-                        break
-                        
-                elif response.status_code == 401:
-                    logger.error("OpenCVE authentication failed - check username and password")
-                    return []
-                elif response.status_code == 404:
-                    logger.info("No results found or reached end of pages")
-                    break
-                else:
-                    logger.warning(f"OpenCVE API returned status {response.status_code}")
-                    break
+            for vuln_item in vulnerabilities:
+                all_cves.append(self._format_cve_data(vuln_item['cve']))
             
-            # Limit results to requested amount
-            all_cves = all_cves[:limit]
-            logger.info(f"Total CVEs returned: {len(all_cves)}")
+            if start_index + len(vulnerabilities) >= data.get('totalResults', 0):
+                break
             
-            # Format CVE data
-            formatted_cves = [self._format_cve_data(cve, detailed=False) for cve in all_cves]
-            return formatted_cves
-                
-        except Exception as e:
-            logger.error(f"Error fetching from OpenCVE: {e}", exc_info=True)
-            return []
+            start_index += len(vulnerabilities)
+        
+        all_cves.sort(key=lambda x: x['published_date'], reverse=True)
+        return all_cves[:limit]
     
     def get_cve_details(self, cve_id: str) -> Optional[Dict[str, Any]]:
-        """Get detailed information about a specific CVE using /cve/<id> endpoint"""
+        """Get detailed information about a specific CVE"""
         
-        try:
-            headers = {"Accept": "application/json"}
-            
-            logger.info(f"Fetching details for {cve_id}")
-            
-            response = requests.get(
-                f"{self.base_url}/cve/{cve_id}",
-                auth=self.auth,
-                headers=headers,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                return self._format_cve_data(response.json(), detailed=True)
-            elif response.status_code == 401:
-                logger.error("OpenCVE authentication failed - check username and password")
-                return None
-            elif response.status_code == 404:
-                logger.warning(f"CVE {cve_id} not found")
-                return None
-            else:
-                logger.warning(f"OpenCVE API returned status {response.status_code} for CVE {cve_id}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error fetching CVE details: {e}")
-            return None
+        self._rate_limit()
+        
+        response = requests.get(
+            self.base_url,
+            params={"cveId": cve_id},
+            headers=self.headers,
+            timeout=15
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            vulnerabilities = data.get('vulnerabilities', [])
+            if vulnerabilities:
+                return self._format_cve_data(vulnerabilities[0]['cve'])
+        
+        return None
     
     def _extract_vendor_keyword(self, name: str) -> str:
         """Extract the core vendor/product keyword from a full company name"""
@@ -287,64 +262,73 @@ class OpenCVEAPI:
         
         return name_lower
     
-    def _format_cve_data(self, cve: Dict, detailed: bool = False) -> Dict[str, Any]:
-        """Format CVE data from OpenCVE API response"""
+    def _format_cve_data(self, cve: Dict) -> Dict[str, Any]:
+        """Format CVE data from NVD API 2.0 response"""
         
-        # Basic fields available in both list and detail views
-        formatted = {
-            "cve_id": cve.get('cve_id'),
-            "summary": cve.get('description', ''),
-            "published_date": cve.get('created_at'),
-            "updated_date": cve.get('updated_at'),
-            "source": "OpenCVE"
+        # Required fields - cve object always has 'id'
+        cve_id = cve['id']
+        published_date = cve['published']
+        updated_date = cve['lastModified']
+        
+        # descriptions is required - get English description
+        summary = next((d['value'] for d in cve['descriptions'] if d.get('lang') == 'en'), '')
+        
+        # metrics is optional
+        metrics = cve.get('metrics', {})
+        cvss_score = None
+        cvss_vector = None
+        severity = None
+        
+        # Try v3.1, then v3.0, then v2.0
+        for metric_key in ['cvssMetricV31', 'cvssMetricV30']:
+            metric_list = metrics.get(metric_key, [])
+            if metric_list:
+                cvss_data = metric_list[0]['cvssData']
+                cvss_score = cvss_data['baseScore']
+                cvss_vector = cvss_data['vectorString']
+                severity = cvss_data['baseSeverity'].upper()
+                break
+        
+        if not cvss_score:
+            metric_list = metrics.get('cvssMetricV2', [])
+            if metric_list:
+                cvss_data = metric_list[0]['cvssData']
+                cvss_score = cvss_data['baseScore']
+                cvss_vector = cvss_data['vectorString']
+                severity = "HIGH" if cvss_score >= 7.0 else "MEDIUM" if cvss_score >= 4.0 else "LOW"
+        
+        # weaknesses is optional
+        cwes = [desc['value'] for weakness in cve.get('weaknesses', []) 
+                for desc in weakness.get('description', []) 
+                if desc.get('value', '').startswith('CWE-')]
+        
+        # configurations is optional
+        vendors = set()
+        products = set()
+        for config in cve.get('configurations', []):
+            for node in config.get('nodes', []):
+                for cpe_match in node.get('cpeMatch', []):
+                    parts = cpe_match.get('criteria', '').split(':')
+                    if len(parts) >= 5:
+                        vendors.add(parts[3])
+                        products.add(parts[4])
+        
+        return {
+            "cve_id": cve_id,
+            "summary": summary,
+            "published_date": published_date,
+            "updated_date": updated_date,
+            "cvss_v3": cvss_score,
+            "cvss_vector": cvss_vector,
+            "severity": severity,
+            "vendors": list(vendors),
+            "products": list(products),
+            "cwes": cwes,
+            "source": "NVD",
+            "source_type": "independent",
+            "source_url": f"https://nvd.nist.gov/vuln/detail/{cve_id}"
         }
-        
-        # Additional fields for detailed view
-        if detailed:
-            # Extract CVSS scores from metrics
-            metrics = cve.get('metrics', {})
-            cvss_v3_1 = metrics.get('cvssV3_1', {}).get('data', {})
-            cvss_v3_0 = metrics.get('cvssV3_0', {}).get('data', {})
-            cvss_v2_0 = metrics.get('cvssV2_0', {}).get('data', {})
-            
-            # Get the best CVSS score available
-            cvss_score = cvss_v3_1.get('score') or cvss_v3_0.get('score') or cvss_v2_0.get('score')
-            cvss_vector = cvss_v3_1.get('vector') or cvss_v3_0.get('vector') or cvss_v2_0.get('vector')
-            
-            # Determine severity
-            severity = None
-            if cvss_score:
-                if cvss_score >= 9.0:
-                    severity = "CRITICAL"
-                elif cvss_score >= 7.0:
-                    severity = "HIGH"
-                elif cvss_score >= 4.0:
-                    severity = "MEDIUM"
-                else:
-                    severity = "LOW"
-            
-            formatted.update({
-                "title": cve.get('title', ''),
-                "cvss_v3": cvss_score,
-                "cvss_vector": cvss_vector,
-                "cvss_v2": cvss_v2_0.get('score'),
-                "severity": severity,
-                "vendors": cve.get('vendors', []),
-                "cwes": cve.get('weaknesses', []),
-                "metrics": metrics
-            })
-        else:
-            # For list view, we don't have full metrics, so set defaults
-            formatted.update({
-                "cvss_v3": None,
-                "cvss_v2": None,
-                "cvss_vector": None,
-                "severity": None,
-                "vendors": [],
-                "cwes": []
-            })
-        
-        return formatted
+
 
 
 class CISAKEVAPI:
@@ -387,37 +371,67 @@ class CISAKEVAPI:
         vulnerabilities = catalog.get('vulnerabilities', [])
         
         results = []
-        search_term = vendor.lower()
-        product_term = product.lower() if product else None
+        
+        # Extract keywords
+        vendor_keywords = self._extract_keywords(vendor)
+        product_keywords = self._extract_keywords(product) if product else []
         
         for vuln in vulnerabilities:
-            vuln_name = vuln.get('vendorProject', '').lower() + ' ' + vuln.get('product', '').lower()
+            vendor_project = vuln.get('vendorProject', '').lower()
+            product_name = vuln.get('product', '').lower()
             
-            # Check if vendor matches
-            if search_term in vuln_name:
-                # If product specified, check product match too
-                if product_term:
-                    if product_term in vuln_name:
+            # Check vendor match
+            vendor_match = any(kw in vendor_project for kw in vendor_keywords)
+            
+            if vendor_match:
+                # If product specified, must match product too
+                if product_keywords:
+                    product_match = any(kw in product_name for kw in product_keywords)
+                    if product_match:
                         results.append(self._format_kev_data(vuln))
                 else:
+                    # No product filter, include all vendor matches
                     results.append(self._format_kev_data(vuln))
         
         return results
     
+    def _extract_keywords(self, name: str) -> List[str]:
+        """Extract search keywords from vendor/product name"""
+        if not name:
+            return []
+        
+        name_lower = name.lower().strip()
+        
+        # Remove common suffixes
+        for suffix in [' inc', ' llc', ' ltd', ' corp', ' corporation', ' company', 
+                       ' technologies', ' technology', ' software', ' labs']:
+            if name_lower.endswith(suffix):
+                name_lower = name_lower[:-len(suffix)].strip()
+        
+        # Split into words and filter out generic terms
+        words = name_lower.split()
+        generic = {'the', 'a', 'an', 'and', 'or', 'of', 'for', 'with'}
+        return [w for w in words if w not in generic and len(w) > 2]
+    
     def _format_kev_data(self, vuln: Dict) -> Dict[str, Any]:
-        """Format KEV data"""
+        """Format KEV data according to CISA schema"""
+        # Required fields per schema
+        cve_id = vuln['cveID']
         return {
-            "cve_id": vuln.get('cveID'),
-            "vendor_project": vuln.get('vendorProject'),
-            "product": vuln.get('product'),
-            "vulnerability_name": vuln.get('vulnerabilityName'),
-            "description": vuln.get('shortDescription'),
-            "required_action": vuln.get('requiredAction'),
-            "due_date": vuln.get('dueDate'),
-            "date_added": vuln.get('dateAdded'),
-            "known_ransomware": vuln.get('knownRansomwareCampaignUse', 'Unknown'),
+            "cve_id": cve_id,
+            "vendor_project": vuln['vendorProject'],
+            "product": vuln['product'],
+            "vulnerability_name": vuln['vulnerabilityName'],
+            "date_added": vuln['dateAdded'],
+            "description": vuln['shortDescription'],
+            "required_action": vuln['requiredAction'],
+            "due_date": vuln['dueDate'],
+            "known_ransomware": vuln.get('knownRansomwareCampaignUse'),
             "notes": vuln.get('notes', ''),
-            "source": "CISA KEV"
+            "cwes": vuln.get('cwes', []),
+            "source": "CISA KEV",
+            "source_type": "independent",
+            "source_url": f"https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext={cve_id}"
         }
 
 

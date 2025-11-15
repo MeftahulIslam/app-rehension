@@ -170,6 +170,10 @@ function displayComparison(assessments) {
                     ${a.recommendations.length > 0 ? `
                         <p><strong>Top Recommendation:</strong> ${a.recommendations[0].action}</p>
                     ` : ''}
+                    ${a.evidence_summary ? `
+                        <p><strong>Evidence Quality:</strong> ${a.evidence_summary.total_items} items 
+                        (${a.evidence_summary.independent_percentage.toFixed(0)}% independent sources)</p>
+                    ` : ''}
                 </div>
             `).join('')}
         </div>

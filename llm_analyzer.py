@@ -1,7 +1,8 @@
 """
 LLM integration using Google Gemini for analysis and synthesis
 """
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import logging
 from typing import Dict, Any, List, Optional
 import json
@@ -12,27 +13,40 @@ logger = logging.getLogger(__name__)
 class GeminiAnalyzer:
     """Use Gemini LLM for security analysis and synthesis"""
     
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(model)
-        self.generation_config = {
-            "temperature": 0.1,  # Low temperature for factual, consistent responses
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_output_tokens": 4096,
-        }
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash-exp"):
+        self.client = genai.Client(api_key=api_key)
+        self.model = model
+        self.generation_config = types.GenerateContentConfig(
+            temperature=0.1,  # Low temperature for factual, consistent responses
+            top_p=0.95,
+            top_k=40,
+            max_output_tokens=4096,
+        )
     
-    def resolve_entity(self, input_text: str, product_hunt_data: Optional[Dict] = None) -> Dict[str, Any]:
+    def resolve_entity(self, input_text: str, product_hunt_data: Optional[Dict] = None, evidence_registry=None) -> Dict[str, Any]:
         """Resolve product name, vendor, and URL from input"""
         
         context = ""
+        evidence_refs = []
+        
         if product_hunt_data:
             context = f"\n\nProductHunt Data:\n{json.dumps(product_hunt_data, indent=2)}"
+            if evidence_registry:
+                ev_id = evidence_registry.add_mixed_claim(
+                    source_name="ProductHunt",
+                    claim_text=f"Product info: {product_hunt_data.get('name')} - {product_hunt_data.get('description', '')}",
+                    url=product_hunt_data.get('url'),
+                    confidence="medium"
+                )
+                evidence_refs.append(ev_id)
         
         prompt = f"""You are a security analyst helping to identify software products and vendors.
 
 Given the following input: "{input_text}"
 {context}
+
+IMPORTANT: Use ONLY the information provided above. Do not invent or assume details.
+If information is missing or uncertain, clearly indicate this in the confidence level.
 
 Extract and identify:
 1. Product Name (official name)
@@ -46,15 +60,17 @@ Respond in JSON format:
     "vendor": "company or vendor name",
     "url": "primary website URL or null",
     "aliases": ["alternative names"],
-    "confidence": "high|medium|low"
+    "confidence": "high|medium|low",
+    "evidence_refs": {json.dumps(evidence_refs)}
 }}
 
-Be precise and use official names. If information is uncertain, indicate in confidence level."""
+Be precise and use official names. If information is uncertain, mark confidence as low."""
         
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=self.generation_config
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=self.generation_config
             )
             
             # Extract JSON from response
@@ -66,6 +82,11 @@ Be precise and use official names. If information is uncertain, indicate in conf
                 text = text.split("```")[1].split("```")[0].strip()
             
             result = json.loads(text)
+            
+            # Ensure evidence_refs are included
+            if "evidence_refs" not in result:
+                result["evidence_refs"] = evidence_refs
+                
             return result
             
         except Exception as e:
@@ -76,7 +97,8 @@ Be precise and use official names. If information is uncertain, indicate in conf
                 "vendor": "Unknown",
                 "url": None,
                 "aliases": [],
-                "confidence": "low"
+                "confidence": "low",
+                "evidence_refs": evidence_refs
             }
     
     def classify_software(self, entity_info: Dict, product_data: Optional[Dict] = None) -> Dict[str, Any]:
@@ -117,9 +139,10 @@ Respond in JSON format:
 }}"""
         
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=self.generation_config
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=self.generation_config
             )
             
             text = response.text.strip()
@@ -142,8 +165,46 @@ Respond in JSON format:
                 "confidence": "low"
             }
     
-    def analyze_vulnerabilities(self, cve_data: List[Dict], kev_data: List[Dict]) -> Dict[str, Any]:
+    def analyze_vulnerabilities(self, cve_data: List[Dict], kev_data: List[Dict], evidence_registry=None) -> Dict[str, Any]:
         """Analyze CVE and KEV data to provide vulnerability summary"""
+        
+        evidence_refs = []
+        
+        # Add CVE evidence to registry
+        if evidence_registry and cve_data:
+            ev_id = evidence_registry.add_independent_claim(
+                source_name="NVD (National Vulnerability Database)",
+                claim_text=f"Found {len(cve_data)} CVE vulnerabilities",
+                url="https://nvd.nist.gov",
+                confidence="high",
+                metadata={"cve_count": len(cve_data)}
+            )
+            evidence_refs.append(ev_id)
+        
+        # Add KEV evidence to registry
+        if evidence_registry and kev_data:
+            ev_id = evidence_registry.add_independent_claim(
+                source_name="CISA KEV",
+                claim_text=f"Found {len(kev_data)} known exploited vulnerabilities",
+                url="https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+                confidence="high",
+                metadata={"kev_count": len(kev_data)}
+            )
+            evidence_refs.append(ev_id)
+        
+        # Check for sufficient data
+        if not cve_data and not kev_data:
+            return {
+                "trend": "insufficient_data",
+                "critical_findings": [],
+                "severity_distribution": {},
+                "exploitation_risk": "unknown",
+                "key_concerns": ["Insufficient public evidence - no CVE or KEV data available"],
+                "positive_signals": [],
+                "recommendation": "Unable to assess - insufficient public evidence",
+                "evidence_quality": "insufficient",
+                "evidence_refs": evidence_refs
+            }
         
         # Prepare data summary
         cve_summary = f"Total CVEs found: {len(cve_data)}\n"
@@ -164,6 +225,9 @@ Respond in JSON format:
 {cve_summary}
 {kev_summary}
 
+IMPORTANT: Base your analysis ONLY on the provided data. Do not invent or assume vulnerabilities.
+All findings must be supported by the CVE/KEV data above.
+
 Provide a concise analysis:
 1. Overall vulnerability trend (improving/stable/concerning)
 2. Critical findings that require immediate attention
@@ -176,18 +240,19 @@ Respond in JSON format:
     "critical_findings": ["list of critical issues"],
     "severity_distribution": {{"critical": N, "high": N, "medium": N, "low": N}},
     "exploitation_risk": "high|medium|low|unknown",
-    "key_concerns": ["specific concerns"],
     "positive_signals": ["positive aspects if any"],
     "recommendation": "brief recommendation",
-    "evidence_quality": "high|medium|low"
+    "evidence_quality": "high|medium|low",
+    "evidence_refs": {json.dumps(evidence_refs)}
 }}
 
 Base your analysis ONLY on the provided data. If data is insufficient, indicate in evidence_quality."""
         
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=self.generation_config
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=self.generation_config
             )
             
             text = response.text.strip()
@@ -197,6 +262,11 @@ Base your analysis ONLY on the provided data. If data is insufficient, indicate 
                 text = text.split("```")[1].split("```")[0].strip()
             
             result = json.loads(text)
+            
+            # Ensure evidence_refs are included
+            if "evidence_refs" not in result:
+                result["evidence_refs"] = evidence_refs
+                
             return result
             
         except Exception as e:
@@ -209,11 +279,40 @@ Base your analysis ONLY on the provided data. If data is insufficient, indicate 
                 "key_concerns": ["Unable to analyze vulnerability data"],
                 "positive_signals": [],
                 "recommendation": "Insufficient data for analysis",
-                "evidence_quality": "low"
+                "evidence_quality": "low",
+                "evidence_refs": evidence_refs
             }
     
-    def calculate_trust_score(self, all_data: Dict[str, Any]) -> Dict[str, Any]:
+    def calculate_trust_score(self, all_data: Dict[str, Any], evidence_registry=None) -> Dict[str, Any]:
         """Calculate comprehensive trust score with rationale"""
+        
+        evidence_refs = []
+        
+        # Add evidence from trust calculation factors
+        if evidence_registry:
+            # KEV presence is a key trust factor
+            kev_data = all_data.get('known_exploited', [])
+            if kev_data:
+                for item in kev_data:
+                    evidence_id = evidence_registry.add_independent_claim(
+                        source_name="CISA KEV Catalog",
+                        claim_text=f"Known Exploited Vulnerability: {item.get('cve_id', 'Unknown')} - {item.get('vulnerability_name', '')}",
+                        url=item.get('source_url', ''),
+                        confidence="high"
+                    )
+                    evidence_refs.append(evidence_id)
+            
+            # Vulnerability history
+            vuln_data = all_data.get('vulnerabilities', [])
+            if vuln_data:
+                for item in vuln_data[:3]:  # Top 3 for trust
+                    evidence_id = evidence_registry.add_independent_claim(
+                        source_name="NVD (National Vulnerability Database)",
+                        claim_text=f"CVE: {item.get('cve_id', 'Unknown')} - Severity: {item.get('severity', 'N/A')}",
+                        url=item.get('source_url', ''),
+                        confidence="high"
+                    )
+                    evidence_refs.append(evidence_id)
         
         prompt = f"""You are a CISO evaluating a software product's security posture.
 
@@ -243,15 +342,17 @@ Respond in JSON format:
     }},
     "risk_level": "critical|high|medium|low",
     "key_factors": ["positive and negative factors"],
-    "data_limitations": ["what data is missing"]
+    "data_limitations": ["what data is missing"],
+    "evidence_refs": {json.dumps(evidence_refs)}
 }}
 
 Be objective and cite specific evidence. Higher scores indicate more trust/lower risk."""
         
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=self.generation_config
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=self.generation_config
             )
             
             text = response.text.strip()
@@ -261,6 +362,11 @@ Be objective and cite specific evidence. Higher scores indicate more trust/lower
                 text = text.split("```")[1].split("```")[0].strip()
             
             result = json.loads(text)
+            
+            # Ensure evidence_refs are included
+            if "evidence_refs" not in result:
+                result["evidence_refs"] = evidence_refs
+                
             return result
             
         except Exception as e:
@@ -272,12 +378,26 @@ Be objective and cite specific evidence. Higher scores indicate more trust/lower
                 "scoring_breakdown": {},
                 "risk_level": "unknown",
                 "key_factors": ["Insufficient data"],
-                "data_limitations": ["Analysis error occurred"]
+                "data_limitations": ["Analysis error occurred"],
+                "evidence_refs": evidence_refs
             }
     
     def suggest_alternatives(self, entity_info: Dict, classification: Dict, 
-                           trust_score: Dict) -> List[Dict[str, Any]]:
+                           trust_score: Dict, evidence_registry=None) -> List[Dict[str, Any]]:
         """Suggest safer alternatives"""
+        
+        evidence_refs = []
+        
+        # Note: Alternatives are LLM-generated suggestions, not sourced from external data
+        # We document that these are AI recommendations, not factual claims
+        if evidence_registry:
+            evidence_id = evidence_registry.add_vendor_claim(
+                source_name="AI-Generated Recommendations",
+                claim_text=f"Alternative suggestions for {entity_info.get('product_name', 'unknown product')}",
+                url="",
+                confidence="medium"
+            )
+            evidence_refs.append(evidence_id)
         
         category = classification.get('primary_category', 'Unknown')
         current_score = trust_score.get('score', 50)
@@ -309,15 +429,17 @@ Respond in JSON format:
             "security_advantages": ["specific advantages"],
             "considerations": ["things to consider"]
         }}
-    ]
+    ],
+    "evidence_refs": {json.dumps(evidence_refs)}
 }}
 
 Only suggest real, well-known alternatives. If you cannot identify suitable alternatives, return empty list."""
         
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=self.generation_config
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=self.generation_config
             )
             
             text = response.text.strip()
@@ -327,8 +449,13 @@ Only suggest real, well-known alternatives. If you cannot identify suitable alte
                 text = text.split("```")[1].split("```")[0].strip()
             
             result = json.loads(text)
-            return result.get('alternatives', [])
+            
+            # Ensure evidence_refs are included
+            if "evidence_refs" not in result:
+                result["evidence_refs"] = evidence_refs
+                
+            return result.get('alternatives', []), evidence_refs
             
         except Exception as e:
             logger.error(f"Error in suggesting alternatives: {e}")
-            return []
+            return [], evidence_refs

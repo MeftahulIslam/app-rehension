@@ -5,9 +5,10 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from data_sources import ProductHuntAPI, OpenCVEAPI, CISAKEVAPI
+from data_sources import ProductHuntAPI, NVDAPI, CISAKEVAPI
 from llm_analyzer import GeminiAnalyzer
 from database import AssessmentCache
+from evidence import EvidenceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -20,15 +21,12 @@ class SecurityAssessor:
         
         # Initialize components
         self.product_hunt = ProductHuntAPI(config.PRODUCTHUNT_API_KEY) if config.PRODUCTHUNT_API_KEY else None
-        self.opencve = OpenCVEAPI(
-            username=config.OPENCVE_USERNAME,
-            password=config.OPENCVE_PASSWORD
-        )
+        self.nvd = NVDAPI(api_key=config.NVD_API_KEY)
         self.cisa_kev = CISAKEVAPI()
         self.analyzer = GeminiAnalyzer(config.GEMINI_API_KEY, config.GEMINI_MODEL)
         self.cache = AssessmentCache(config.DATABASE_PATH)
         
-        logger.info("SecurityAssessor initialized")
+        logger.info("SecurityAssessor initialized with NVD API")
     
     def assess_product(self, input_text: str, use_cache: bool = True) -> Dict[str, Any]:
         """
@@ -50,13 +48,16 @@ class SecurityAssessor:
                 logger.info(f"Returning cached assessment for: {input_text}")
                 return cached
         
+        # Initialize evidence registry for this assessment
+        evidence_registry = EvidenceRegistry()
+        
         # Step 1: Gather initial data
         logger.info("Step 1: Gathering product information")
         product_data = self._gather_product_data(input_text)
         
         # Step 2: Resolve entity
         logger.info("Step 2: Resolving entity identity")
-        entity_info = self.analyzer.resolve_entity(input_text, product_data)
+        entity_info = self.analyzer.resolve_entity(input_text, product_data, evidence_registry)
         
         product_name = entity_info.get('product_name')
         vendor = entity_info.get('vendor')
@@ -75,7 +76,8 @@ class SecurityAssessor:
         logger.info("Step 5: Analyzing vulnerabilities")
         vuln_analysis = self.analyzer.analyze_vulnerabilities(
             security_data['cves'],
-            security_data['kevs']
+            security_data['kevs'],
+            evidence_registry
         )
         
         # Step 6: Calculate trust score
@@ -85,16 +87,20 @@ class SecurityAssessor:
             'classification': classification,
             'product_data': product_data,
             'security_data': security_data,
-            'vuln_analysis': vuln_analysis
+            'vuln_analysis': vuln_analysis,
+            'vulnerabilities': security_data['cves'],
+            'known_exploited': security_data['kevs']
         }
-        trust_score = self.analyzer.calculate_trust_score(all_data)
+        trust_score = self.analyzer.calculate_trust_score(all_data, evidence_registry)
         
         # Step 7: Suggest alternatives
         logger.info("Step 7: Suggesting alternatives")
-        alternatives = self.analyzer.suggest_alternatives(entity_info, classification, trust_score)
+        alternatives, alt_evidence_refs = self.analyzer.suggest_alternatives(
+            entity_info, classification, trust_score, evidence_registry
+        )
         
         # Step 8: Compile final assessment
-        logger.info("Step 8: Compiling final assessment")
+        logger.info("Step 8: Compiling final assessment with evidence citations")
         assessment = self._compile_assessment(
             entity_info=entity_info,
             classification=classification,
@@ -102,7 +108,8 @@ class SecurityAssessor:
             security_data=security_data,
             vuln_analysis=vuln_analysis,
             trust_score=trust_score,
-            alternatives=alternatives
+            alternatives=alternatives,
+            evidence_registry=evidence_registry
         )
         
         # Cache the result
@@ -145,43 +152,51 @@ class SecurityAssessor:
             return None
     
     def _gather_security_data(self, vendor: str, product: Optional[str] = None) -> Dict[str, Any]:
-        """Gather CVE and KEV data"""
+        """Gather CVE and KEV data from NVD and CISA"""
         
         cves = []
         kevs = []
         
         try:
-            # Gather CVE data
-            logger.info(f"Fetching CVEs for vendor: {vendor}")
-            cache_key = f"cve_{vendor}_{product or 'all'}"
+            # Gather CVE data from NVD
+            # Priority: 1) Search by product if available, 2) Fall back to vendor
+            if product:
+                logger.info(f"Fetching CVEs for product: {product}")
+                cache_key = f"nvd_cve_{product}"
+            else:
+                logger.info(f"Fetching CVEs for vendor: {vendor}")
+                cache_key = f"nvd_cve_vendor_{vendor}"
+            
             cached_cves = self.cache.get_raw_data(cache_key)
             
             if cached_cves:
                 cves = cached_cves
+                logger.info(f"Using cached CVEs: {len(cves)} found")
             else:
-                cves = self.opencve.search_cves(vendor, product, limit=50)
+                cves = self.nvd.search_cves(vendor, product, limit=50)
                 if cves:
                     self.cache.save_raw_data(cache_key, "cve", cves, expiry_hours=24)
             
-            logger.info(f"Found {len(cves)} CVEs")
+            logger.info(f"Total CVEs from NVD: {len(cves)}")
             
         except Exception as e:
-            logger.error(f"Error gathering CVE data: {e}")
+            logger.error(f"Error gathering CVE data from NVD: {e}")
         
         try:
-            # Gather KEV data
-            logger.info(f"Fetching KEVs for vendor: {vendor}")
+            # Gather KEV data from CISA
+            logger.info(f"Fetching KEVs for vendor: {vendor}, product: {product or 'all'}")
             cache_key = f"kev_{vendor}_{product or 'all'}"
             cached_kevs = self.cache.get_raw_data(cache_key)
             
             if cached_kevs:
                 kevs = cached_kevs
+                logger.info(f"Using cached KEVs: {len(kevs)} found")
             else:
                 kevs = self.cisa_kev.search_kev(vendor, product)
                 if kevs:
                     self.cache.save_raw_data(cache_key, "kev", kevs, expiry_hours=24)
             
-            logger.info(f"Found {len(kevs)} KEVs")
+            logger.info(f"Total KEVs from CISA: {len(kevs)}")
             
         except Exception as e:
             logger.error(f"Error gathering KEV data: {e}")
@@ -194,21 +209,33 @@ class SecurityAssessor:
     def _compile_assessment(self, entity_info: Dict, classification: Dict,
                           product_data: Optional[Dict], security_data: Dict,
                           vuln_analysis: Dict, trust_score: Dict,
-                          alternatives: list) -> Dict[str, Any]:
+                          alternatives: list, evidence_registry=None) -> Dict[str, Any]:
         """Compile all information into final assessment"""
+        
+        # Get evidence summary and citations
+        evidence_summary = {}
+        citations = []
+        evidence_hash = None
+        
+        if evidence_registry:
+            evidence_summary = evidence_registry.get_summary()
+            citations = evidence_registry.get_citations_list()
+            evidence_hash = evidence_registry.get_evidence_hash()
         
         assessment = {
             'metadata': {
                 'timestamp': datetime.now().isoformat(),
                 'version': '1.0',
-                'input_query': entity_info.get('product_name')
+                'input_query': entity_info.get('product_name'),
+                'evidence_hash': evidence_hash
             },
             'entity': {
                 'product_name': entity_info.get('product_name'),
                 'vendor': entity_info.get('vendor'),
                 'url': entity_info.get('url'),
                 'aliases': entity_info.get('aliases', []),
-                'confidence': entity_info.get('confidence')
+                'confidence': entity_info.get('confidence'),
+                'evidence_refs': entity_info.get('evidence_refs', [])
             },
             'classification': {
                 'category': classification.get('primary_category'),
@@ -231,7 +258,9 @@ class SecurityAssessor:
                     'severity_distribution': vuln_analysis.get('severity_distribution', {}),
                     'critical_findings': vuln_analysis.get('critical_findings', []),
                     'key_concerns': vuln_analysis.get('key_concerns', []),
-                    'positive_signals': vuln_analysis.get('positive_signals', [])
+                    'positive_signals': vuln_analysis.get('positive_signals', []),
+                    'evidence_quality': vuln_analysis.get('evidence_quality', 'unknown'),
+                    'evidence_refs': vuln_analysis.get('evidence_refs', [])
                 },
                 'recent_cves': security_data['cves'][:5],  # Top 5 recent/critical
                 'kev_list': security_data['kevs'][:5]  # Top 5 KEVs
@@ -243,11 +272,14 @@ class SecurityAssessor:
                 'rationale': trust_score.get('rationale'),
                 'scoring_breakdown': trust_score.get('scoring_breakdown', {}),
                 'key_factors': trust_score.get('key_factors', []),
-                'data_limitations': trust_score.get('data_limitations', [])
+                'data_limitations': trust_score.get('data_limitations', []),
+                'evidence_refs': trust_score.get('evidence_refs', [])
             },
             'alternatives': alternatives,
             'recommendations': self._generate_recommendations(trust_score, vuln_analysis),
-            'sources': self._compile_sources(product_data, security_data)
+            'sources': self._compile_sources(product_data, security_data),
+            'evidence_summary': evidence_summary,
+            'citations': citations
         }
         
         return assessment
@@ -303,9 +335,9 @@ class SecurityAssessor:
         
         if security_data['cves']:
             sources.append({
-                'name': 'OpenCVE',
+                'name': 'NVD (National Vulnerability Database)',
                 'type': 'CVE Data',
-                'url': 'https://www.opencve.io',
+                'url': 'https://nvd.nist.gov',
                 'count': len(security_data['cves']),
                 'timestamp': datetime.now().isoformat()
             })

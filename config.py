@@ -9,10 +9,11 @@ class Config:
     # API Keys
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
     PRODUCTHUNT_API_KEY = os.getenv('PRODUCTHUNT_API_KEY')
+    NVD_API_KEY = os.getenv('NVD_API_KEY')  # Optional: Increases rate limits from 5 to 50 requests per 30 seconds
     
-    # OpenCVE Authentication (Basic Auth)
-    OPENCVE_USERNAME = os.getenv('OPENCVE_USERNAME')
-    OPENCVE_PASSWORD = os.getenv('OPENCVE_PASSWORD')
+    # Deprecated - replaced by NVD API
+    # OPENCVE_USERNAME = os.getenv('OPENCVE_USERNAME')
+    # OPENCVE_PASSWORD = os.getenv('OPENCVE_PASSWORD')
     
     # Flask settings
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
@@ -23,7 +24,7 @@ class Config:
     DATABASE_PATH = os.getenv('DATABASE_PATH', 'data/assessments.db')
     
     # API Endpoints
-    OPENCVE_API_BASE = "https://app.opencve.io/api"
+    NVD_API_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
     CISA_KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
     PRODUCTHUNT_API_BASE = "https://api.producthunt.com/v2/api/graphql"
     
