@@ -570,7 +570,7 @@ class SecurityAssessor:
                 cves = cached_cves
                 logger.info(f"Using cached CVEs: {len(cves)} found")
             else:
-                cves = self.nvd.search_cves(vendor, product, limit=50)
+                cves = self.nvd.search_cves(vendor, product, limit=200)
                 if cves:
                     self.cache.save_raw_data(cache_key, "cve", cves, expiry_hours=24)
             
@@ -602,6 +602,28 @@ class SecurityAssessor:
             'cves': cves,
             'kevs': kevs
         }
+    
+    def _aggregate_cves_by_year(self, cves: list) -> Dict[str, int]:
+        """Aggregate CVEs by year for timeline visualization"""
+        timeline = {}
+        
+        logger.info(f"Aggregating {len(cves)} CVEs by year...")
+        
+        for cve in cves:
+            try:
+                # published_date is in format 'YYYY-MM-DDTHH:MM:SS.000'
+                published_date = cve.get('published_date', '')
+                year = published_date[:4]
+                if year and year.isdigit():
+                    timeline[year] = timeline.get(year, 0) + 1
+            except Exception as e:
+                logger.warning(f"Error parsing CVE date for {cve.get('cve_id', 'unknown')}: {e}")
+                continue
+        
+        sorted_timeline = dict(sorted(timeline.items()))
+        logger.info(f"CVE timeline data: {sorted_timeline}")
+        
+        return sorted_timeline  # Sort by year
     
     def _compile_assessment(self, entity_info: Dict, classification: Dict,
                           product_data: Optional[Dict], security_data: Dict,
@@ -661,7 +683,8 @@ class SecurityAssessor:
                     'key_concerns': vuln_analysis.get('key_concerns', []),
                     'positive_signals': vuln_analysis.get('positive_signals', []),
                     'evidence_quality': vuln_analysis.get('evidence_quality', 'unknown'),
-                    'evidence_refs': vuln_analysis.get('evidence_refs', [])
+                    'evidence_refs': vuln_analysis.get('evidence_refs', []),
+                    'cve_timeline': self._aggregate_cves_by_year(security_data['cves'])
                 },
                 'recent_cves': security_data['cves'][:5],  # Top 5 recent/critical
                 'kev_list': security_data['kevs'][:5]  # Top 5 KEVs

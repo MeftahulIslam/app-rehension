@@ -42,6 +42,7 @@ function displayAssessment(assessment) {
         ${renderInputMetadata(assessment)}
         ${renderEntityInfo(entity, classification, isVirusTotalAnalysis)}
         ${renderTrustScore(trustScore, scoreColor, isVirusTotalAnalysis)}
+        ${renderSecurityEcosystemGraphCard()}
     `;
     
     // Conditional sections based on analysis type
@@ -67,6 +68,42 @@ function displayAssessment(assessment) {
     html += renderMetadata(assessment);
     
     content.innerHTML = html;
+    
+    // Initialize Security Ecosystem Graph
+    setTimeout(() => {
+        if (typeof renderSecurityEcosystemGraph === 'function') {
+            renderSecurityEcosystemGraph(assessment);
+        } else {
+            console.error('Security graph function not loaded');
+        }
+    }, 100);
+    
+    // Initialize CVE timeline chart after DOM is updated
+    const cveTimeline = security?.vulnerability_summary?.cve_timeline;
+    if (cveTimeline && Object.keys(cveTimeline).length > 0) {
+        console.log('Initializing CVE timeline chart with data:', cveTimeline);
+        
+        // Add event listener to details element to render chart when opened
+        const detailsElement = document.getElementById('cveTimelineDetails');
+        if (detailsElement) {
+            detailsElement.addEventListener('toggle', function() {
+                if (this.open) {
+                    console.log('Details opened, creating chart...');
+                    // Use setTimeout to ensure the canvas is visible and has dimensions
+                    setTimeout(() => {
+                        createCVETimelineChart(cveTimeline);
+                    }, 50);
+                }
+            });
+            
+            // If details is open by default, create chart immediately
+            if (detailsElement.open) {
+                setTimeout(() => {
+                    createCVETimelineChart(cveTimeline);
+                }, 100);
+            }
+        }
+    }
 }
 
 function renderInputMetadata(assessment) {
@@ -844,6 +881,7 @@ function renderSecurityPosture(security) {
     const dataSource = vulnSummary.data_source;
     const dataSourceNote = vulnSummary.data_source_note;
     const isAPIBased = dataSource === 'api_data_with_llm_analysis';
+    const cveTimeline = vulnSummary.cve_timeline || {};
     
     return `
         <div style="margin-bottom: 2rem;">
@@ -874,6 +912,22 @@ function renderSecurityPosture(security) {
                         ${dataSourceNote}
                     </p>
                 </div>
+            ` : ''}
+            
+            ${Object.keys(cveTimeline).length > 0 ? `
+                <details id="cveTimelineDetails" open style="margin-top: 1.5rem; background: #f8f9fa; padding: 1rem; border-radius: 8px;">
+                    <summary style="cursor: pointer; font-weight: bold; font-size: 1.1rem; color: #667eea; margin-bottom: 1rem;">
+                        📈 CVE Timeline Analysis (${vulnSummary.total_cves} vulnerabilities across ${Object.keys(cveTimeline).length} years)
+                    </summary>
+                    <div style="background: white; padding: 1.5rem; border-radius: 6px; margin-top: 1rem;">
+                        <p style="color: #666; margin-bottom: 1rem;">
+                            This time series chart shows the distribution of discovered vulnerabilities over time, helping identify security trends and patterns.
+                        </p>
+                        <div style="position: relative; height: 400px;">
+                            <canvas id="cveTimelineChart"></canvas>
+                        </div>
+                    </div>
+                </details>
             ` : ''}
             
             ${vulnSummary.critical_findings && vulnSummary.critical_findings.length > 0 ? `
@@ -1104,6 +1158,298 @@ function renderVirusTotalThreatAnalysis(virustotal) {
                         ${hashes.sha1 ? `<div style="margin-bottom: 0.5rem;"><strong>SHA-1:</strong> ${hashes.sha1}</div>` : ''}
                         ${hashes.md5 ? `<div style="margin-bottom: 0.5rem;"><strong>MD5:</strong> ${hashes.md5}</div>` : ''}
                     </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Create CVE Timeline Chart using Chart.js
+ * @param {Object} cveTimeline - Object mapping years to CVE counts
+ */
+function createCVETimelineChart(cveTimeline) {
+    console.log('createCVETimelineChart called with:', cveTimeline);
+    console.log('Number of years in timeline:', Object.keys(cveTimeline).length);
+    console.log('Years range:', Object.keys(cveTimeline).sort());
+    
+    // Check if Chart.js is loaded
+    if (typeof Chart === 'undefined') {
+        console.error('Chart.js is not loaded!');
+        return;
+    }
+    
+    const canvas = document.getElementById('cveTimelineChart');
+    if (!canvas) {
+        console.error('Canvas element #cveTimelineChart not found in DOM');
+        return;
+    }
+    
+    console.log('Canvas element found:', canvas);
+    
+    // Destroy existing chart if it exists
+    const existingChart = Chart.getChart(canvas);
+    if (existingChart) {
+        console.log('Destroying existing chart');
+        existingChart.destroy();
+    }
+    
+    // Prepare data
+    const years = Object.keys(cveTimeline).sort();
+    const counts = years.map(year => cveTimeline[year]);
+    
+    console.log('Chart data - Years:', years);
+    console.log('Chart data - Counts:', counts);
+    
+    if (years.length === 0 || counts.length === 0) {
+        console.warn('No data to display in chart');
+        return;
+    }
+    
+    // Find max value for scaling
+    const maxCount = Math.max(...counts);
+    
+    // Create gradient for line fill
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+    gradient.addColorStop(0, 'rgba(102, 126, 234, 0.5)');
+    gradient.addColorStop(1, 'rgba(118, 75, 162, 0.05)');
+    
+    console.log('Creating Chart.js instance...');
+    
+    // Create chart
+    try {
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: years,
+                datasets: [{
+                    label: 'Number of CVEs',
+                    data: counts,
+                    backgroundColor: gradient,
+                    borderColor: 'rgba(102, 126, 234, 1)',
+                    borderWidth: 3,
+                    fill: true,
+                    tension: 0.4,
+                    pointBackgroundColor: 'rgba(102, 126, 234, 1)',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 5,
+                    pointHoverRadius: 7,
+                    pointHoverBackgroundColor: 'rgba(118, 75, 162, 1)',
+                    pointHoverBorderColor: '#fff',
+                    pointHoverBorderWidth: 3,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            font: {
+                                size: 14,
+                                weight: 'bold'
+                            },
+                            color: '#333'
+                        }
+                    },
+                    title: {
+                        display: true,
+                        text: 'CVE Discovery Time Series',
+                        font: {
+                            size: 16,
+                            weight: 'bold'
+                        },
+                        color: '#667eea',
+                        padding: {
+                            top: 10,
+                            bottom: 20
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleColor: '#fff',
+                        bodyColor: '#fff',
+                        borderColor: '#667eea',
+                        borderWidth: 2,
+                        padding: 12,
+                        displayColors: false,
+                        callbacks: {
+                            title: function(tooltipItems) {
+                                return 'Year ' + tooltipItems[0].label;
+                            },
+                            label: function(context) {
+                                const count = context.parsed.y;
+                                const total = counts.reduce((a, b) => a + b, 0);
+                                const percentage = ((count / total) * 100).toFixed(1);
+                                return [
+                                    `CVEs Discovered: ${count}`,
+                                    `Percentage of Total: ${percentage}%`
+                                ];
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            stepSize: Math.ceil(maxCount / 10),
+                            font: {
+                                size: 12
+                            },
+                            color: '#666'
+                        },
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)',
+                            drawBorder: false
+                        },
+                        title: {
+                            display: true,
+                            text: 'Number of Vulnerabilities',
+                            font: {
+                                size: 13,
+                                weight: 'bold'
+                            },
+                            color: '#666'
+                        }
+                    },
+                    x: {
+                        ticks: {
+                            font: {
+                                size: 12
+                            },
+                            color: '#666',
+                            maxRotation: 45,
+                            minRotation: 0
+                        },
+                        grid: {
+                            display: false,
+                            drawBorder: false
+                        },
+                        title: {
+                            display: true,
+                            text: 'Year',
+                            font: {
+                                size: 13,
+                                weight: 'bold'
+                            },
+                            color: '#666'
+                        }
+                    }
+                },
+                animation: {
+                    duration: 1000,
+                    easing: 'easeInOutQuart'
+                }
+            }
+        });
+        
+        console.log('Chart created successfully:', chart);
+    } catch (error) {
+        console.error('Error creating chart:', error);
+    }
+}
+
+/**
+ * Render Security Ecosystem Graph Card
+ * @returns {string} HTML for the graph container
+ */
+function renderSecurityEcosystemGraphCard() {
+    return `
+        <div class="card" style="margin-top: 2rem;">
+            <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 1.5rem;">🕸️</span>
+                Security Ecosystem Graph
+            </h3>
+            <p style="color: #666; margin-bottom: 1.5rem; line-height: 1.6;">
+                Interactive knowledge graph showing relationships between product, vendor, vulnerabilities, 
+                alternatives, and data sources. Click nodes for details, hover to highlight connections.
+            </p>
+            
+            <!-- Graph Controls -->
+            <div id="graphControls" style="margin-bottom: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button onclick="filterGraphBySeverity('all')" 
+                        style="padding: 0.5rem 1rem; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                    ✓ Show All CVEs
+                </button>
+                <button onclick="filterGraphBySeverity('critical_high')" 
+                        style="padding: 0.5rem 1rem; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                    ⚠️ Critical + High Only
+                </button>
+                <button onclick="filterGraphBySeverity('critical')" 
+                        style="padding: 0.5rem 1rem; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                    🔴 Critical Only
+                </button>
+                <button onclick="centerGraphOnProduct()" 
+                        style="padding: 0.5rem 1rem; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                    🎯 Re-center
+                </button>
+                <button onclick="toggleGraphPhysics()" 
+                        style="padding: 0.5rem 1rem; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">
+                    ⚡ Toggle Physics
+                </button>
+                <button onclick="exportGraphAsPNG()" 
+                        style="padding: 0.5rem 1rem; border: 1px solid #667eea; background: #667eea; color: white; border-radius: 4px; cursor: pointer; font-size: 0.9rem; font-weight: 500;">
+                    💾 Export PNG
+                </button>
+            </div>
+            
+            <!-- Graph Container -->
+            <div id="securityGraph" 
+                 style="width: 100%; height: 600px; border: 2px solid #e1e8ed; border-radius: 8px; background: #fafbfc;">
+                <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #999;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">🔄</div>
+                        <div>Loading security ecosystem graph...</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Legend -->
+            <div id="graphLegend" style="margin-top: 1.5rem; padding: 1.5rem; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border-radius: 8px; border: 1px solid #dee2e6;">
+                <div style="font-weight: 600; margin-bottom: 1rem; font-size: 1rem; color: #333;">
+                    📊 Graph Legend
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.8rem; font-size: 0.9rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="display: inline-block; width: 20px; height: 20px; background: #3498db; border: 2px solid #2980b9; border-radius: 50%;"></span>
+                        <span><strong>Product</strong> (Center)</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="display: inline-block; width: 20px; height: 20px; background: #27ae60; border: 2px solid #1e8449; border-radius: 50%;"></span>
+                        <span><strong>Vendor</strong></span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="display: inline-block; width: 16px; height: 16px; background: #c0392b; border: 2px solid #7d0e0e; border-radius: 50%;"></span>
+                        <span><strong>Critical CVE</strong></span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="display: inline-block; width: 16px; height: 16px; background: #e74c3c; border: 2px solid #a93226; border-radius: 50%;"></span>
+                        <span><strong>High CVE</strong></span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="display: inline-block; width: 16px; height: 16px; background: #f39c12; border: 2px solid #b9770e; border-radius: 50%;"></span>
+                        <span><strong>Medium CVE</strong></span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="display: inline-block; width: 16px; height: 16px; background: #8b0000; border: 2px solid #641e16; border-radius: 50%;"></span>
+                        <span><strong>⚠️ KEV</strong> (Exploited)</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="display: inline-block; width: 20px; height: 20px; background: #9b59b6; border: 2px solid #6c3483; border-radius: 50%;"></span>
+                        <span><strong>Alternative</strong></span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="display: inline-block; width: 16px; height: 16px; background: #1abc9c; border: 2px solid #117a65;"></span>
+                        <span><strong>Data Source</strong></span>
+                    </div>
+                </div>
+                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #dee2e6; font-size: 0.85rem; color: #666;">
+                    <strong>💡 Tips:</strong> Click CVE nodes to open NVD details • Hover to highlight connections • Drag nodes to rearrange • Scroll to zoom
                 </div>
             </div>
         </div>
