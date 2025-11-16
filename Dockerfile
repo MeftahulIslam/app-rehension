@@ -13,8 +13,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application's code
 COPY . .
 
-# Make port 5000 available to the world outside this container
-EXPOSE 5000
+# Create data directory for cache
+RUN mkdir -p /app/data
 
-# Run app.py when the container launches
-CMD ["python", "app.py"]
+# Make port 8080 available (Cloud Run default)
+EXPOSE 8080
+
+# Set environment variable for production
+ENV PYTHONUNBUFFERED=1
+
+# Use gunicorn for production with proper timeout settings
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 300 --access-logfile - --error-logfile - app:app

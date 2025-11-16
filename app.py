@@ -6,6 +6,7 @@ import logging
 import json
 import queue
 import threading
+import os
 from datetime import datetime
 
 from config import Config
@@ -354,8 +355,6 @@ def server_error(e):
     """500 error handler"""
     logger.error(f"Server error: {e}")
     return render_template('error.html', error='Internal server error'), 500
-
-import os
 
 if __name__ == '__main__':
     if not Config.GEMINI_API_KEY:
