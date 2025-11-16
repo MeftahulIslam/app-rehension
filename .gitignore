@@ -31,7 +31,6 @@ instance/
 # Logs
 *.log
 logs/
-.github/*
 # OS
 .DS_Store
 Thumbs.db

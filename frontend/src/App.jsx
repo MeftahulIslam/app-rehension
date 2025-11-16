@@ -138,26 +138,27 @@ function App() {
           <div className="container mx-auto px-6 py-4">
             <div className="flex items-center justify-between">
               {/* Logo and Brand */}
-              <motion.div
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: 0.2, duration: 0.5 }}
-                className="flex items-center gap-3"
-              >
-                <div className="relative">
-                  <Shield className="w-8 h-8 text-white relative z-10" />
-                  <div className="absolute inset-0 bg-purple-400 blur-lg opacity-50 animate-pulse"></div>
-                </div>
-                <div>
-                  <h1 className="text-xl font-bold text-white bg-gradient-to-r from-white to-purple-200 bg-clip-text">
-                    App-rehension
-                  </h1>
-                  <p className="text-xs text-purple-100 flex items-center gap-1">
-                    <Sparkles className="w-3 h-3" />
-                    Clarity. Control. No more guessing.
-                  </p>
-                </div>
-              </motion.div>
+              <Link to="/">
+                <motion.div
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ delay: 0.2, duration: 0.5 }}
+                  className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+                >
+                  <div className="relative">
+                    <Shield className="w-8 h-8 text-white relative z-10" />
+                    <div className="absolute inset-0 bg-purple-400 blur-lg opacity-50 animate-pulse"></div>
+                  </div>
+                  <div>
+                    <h1 className="text-xl font-bold text-white bg-gradient-to-r from-white to-purple-200 bg-clip-text">
+                    </h1>
+                    <p className="text-xs text-purple-100 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      Clarity & Control
+                    </p>
+                  </div>
+                </motion.div>
+              </Link>
 
               {/* Navigation */}
               <Navigation onReset={handleReset} />

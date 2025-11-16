@@ -84,7 +84,7 @@ export function SecurityPostureContent({ security }) {
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-secondary/30 rounded-lg p-3">
-          <div className="text-xs text-muted-foreground mb-1">Total CVEs</div>
+          <div className="text-xs text-muted-foreground mb-1">Total CVEs (max 200)</div>
           <div className="text-2xl font-bold">{security.total_cves || 0}</div>
         </div>
         <div className="bg-secondary/30 rounded-lg p-3">
@@ -328,7 +328,7 @@ export function AlternativesContent({ alternatives }) {
             )}
           </div>
           {alt.rationale && (
-            <p className="text-xs text-muted-foreground line-clamp-2">{alt.rationale}</p>
+            <p className="text-xs text-muted-foreground">{alt.rationale}</p>
           )}
         </div>
       ))}

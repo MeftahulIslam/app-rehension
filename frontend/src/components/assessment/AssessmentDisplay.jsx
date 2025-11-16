@@ -55,6 +55,10 @@ function AssessmentDisplay({ assessment }) {
     setOpenCard(openCard === cardKey ? null : cardKey);
   };
 
+  // Check if insufficient data was fetched
+  const hasInsufficientData = trustScore?.insufficient_data === true || 
+                              (security?.total_cves === 0 && trustScore?.score === null);
+
   // If it's a VirusTotal assessment, show the special VirusTotal layout
   if (isVirusTotalAssessment) {
     return <VirusTotalDisplay assessment={assessment} />;
@@ -70,6 +74,44 @@ function AssessmentDisplay({ assessment }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
             <span className="font-medium">Loaded from cache</span>
+          </div>
+        </div>
+      )}
+
+      {/* Insufficient Data Warning */}
+      {hasInsufficientData && (
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-6">
+          <div className="flex items-start gap-4">
+            <div className="shrink-0">
+              <svg className="w-6 h-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-bold text-yellow-500 mb-2">No Data Available</h3>
+              <p className="text-muted-foreground mb-3">
+                {trustScore?.rationale || "Unable to fetch security data from external APIs. This could mean:"}
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground ml-2">
+                {trustScore?.data_limitations && trustScore.data_limitations.length > 0 ? (
+                  trustScore.data_limitations.map((limitation, idx) => (
+                    <li key={idx}>{limitation}</li>
+                  ))
+                ) : (
+                  <>
+                    <li>The product is very new or not widely analyzed</li>
+                    <li>No CVE records exist in the NVD database</li>
+                    <li>API services are temporarily unavailable</li>
+                    <li>The product name may need to be more specific</li>
+                  </>
+                )}
+              </ul>
+              {trustScore?.key_factors && trustScore.key_factors.length > 0 && (
+                <div className="mt-3 text-sm text-yellow-600 font-medium">
+                  Note: {trustScore.key_factors.join(', ')}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -103,7 +145,7 @@ function AssessmentDisplay({ assessment }) {
         {/* Security Posture */}
         <ExpandableCard 
           key="security-posture" 
-          title="🛡️ Security Posture" 
+          title="Security Posture" 
           isOpen={openCard === 'security-posture'}
           onToggle={() => handleCardToggle('security-posture')}
         >
@@ -113,7 +155,7 @@ function AssessmentDisplay({ assessment }) {
         {/* Vulnerabilities */}
         <ExpandableCard 
           key="vulnerabilities" 
-          title="Recent Vulnerabilities" 
+          title="Recent Vulnerabilities (max 200)" 
           badge={security?.total_cves} 
           isOpen={openCard === 'vulnerabilities'}
           onToggle={() => handleCardToggle('vulnerabilities')}
@@ -125,7 +167,7 @@ function AssessmentDisplay({ assessment }) {
         {assessment.security_practices && (
           <ExpandableCard 
             key="security-practices" 
-            title="🔒 Security Practices" 
+            title="Security Practices" 
             isOpen={openCard === 'security-practices'}
             onToggle={() => handleCardToggle('security-practices')}
           >
@@ -137,7 +179,7 @@ function AssessmentDisplay({ assessment }) {
         {assessment.incidents && (
           <ExpandableCard 
             key="security-incidents" 
-            title="🚨 Security Incidents" 
+            title="Security Incidents" 
             badge={assessment.incidents.count} 
             isOpen={openCard === 'security-incidents'}
             onToggle={() => handleCardToggle('security-incidents')}
@@ -150,7 +192,7 @@ function AssessmentDisplay({ assessment }) {
         {assessment.data_compliance && (
           <ExpandableCard 
             key="data-compliance" 
-            title="📋 Data & Compliance" 
+            title="Data & Compliance" 
             isOpen={openCard === 'data-compliance'}
             onToggle={() => handleCardToggle('data-compliance')}
           >
@@ -162,7 +204,7 @@ function AssessmentDisplay({ assessment }) {
         {alternatives.length > 0 && (
           <ExpandableCard 
             key="alternatives" 
-            title="💡 Alternatives" 
+            title="Alternatives" 
             badge={alternatives.length} 
             isOpen={openCard === 'alternatives'}
             onToggle={() => handleCardToggle('alternatives')}
@@ -174,7 +216,7 @@ function AssessmentDisplay({ assessment }) {
         {/* Metadata */}
         <ExpandableCard 
           key="metadata" 
-          title="ℹ️ Metadata" 
+          title="ℹMetadata" 
           isOpen={openCard === 'metadata'}
           onToggle={() => handleCardToggle('metadata')}
         >

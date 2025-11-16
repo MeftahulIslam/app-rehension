@@ -396,17 +396,17 @@ def api_compare():
             'detected_product': product2
         }
         
-        # Extract trust scores
-        trust_score_1 = assessment1.get('trust_score', {}).get('overall_score', 0)
-        trust_score_2 = assessment2.get('trust_score', {}).get('overall_score', 0)
+        # Extract trust scores (use 'score' key, not 'overall_score')
+        trust_score_1 = assessment1.get('trust_score', {}).get('score') or 0
+        trust_score_2 = assessment2.get('trust_score', {}).get('score') or 0
         
-        # Extract CVE counts
-        cve_count_1 = len(assessment1.get('security_posture', {}).get('vulnerabilities', {}).get('cve_list', []))
-        cve_count_2 = len(assessment2.get('security_posture', {}).get('vulnerabilities', {}).get('cve_list', []))
+        # Extract CVE counts (use total_cves from security_posture)
+        cve_count_1 = assessment1.get('security_posture', {}).get('total_cves', 0)
+        cve_count_2 = assessment2.get('security_posture', {}).get('total_cves', 0)
         
-        # Extract KEV counts
-        kev_count_1 = len(assessment1.get('security_posture', {}).get('vulnerabilities', {}).get('kev_list', []))
-        kev_count_2 = len(assessment2.get('security_posture', {}).get('vulnerabilities', {}).get('kev_list', []))
+        # Extract KEV counts (use total_kevs from security_posture)
+        kev_count_1 = assessment1.get('security_posture', {}).get('total_kevs', 0)
+        kev_count_2 = assessment2.get('security_posture', {}).get('total_kevs', 0)
         
         # Calculate comparison metrics
         comparison_metrics = {

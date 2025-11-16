@@ -180,11 +180,48 @@ function ComparisonDisplay({ comparison }) {
     return '#D32F2F';
   };
 
+  // Check if products have insufficient data
+  const product1HasInsufficientData = product1.trust_score?.insufficient_data === true || 
+                                       (product1.security_posture?.total_cves === 0 && product1.trust_score?.score === null);
+  const product2HasInsufficientData = product2.trust_score?.insufficient_data === true || 
+                                       (product2.security_posture?.total_cves === 0 && product2.trust_score?.score === null);
+
   return (
     <div className="space-y-6">
+      {/* Insufficient Data Warnings */}
+      {(product1HasInsufficientData || product2HasInsufficientData) && (
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-6">
+          <div className="flex items-start gap-4">
+            <div className="shrink-0">
+              <svg className="w-6 h-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-bold text-yellow-500 mb-2">Limited Data Available</h3>
+              <p className="text-muted-foreground mb-3">
+                No security data could be fetched from external APIs for {
+                  product1HasInsufficientData && product2HasInsufficientData 
+                    ? 'both products' 
+                    : product1HasInsufficientData 
+                      ? `"${product1.entity?.product_name || product1.entity?.vendor}"`
+                      : `"${product2.entity?.product_name || product2.entity?.vendor}"`
+                }. This comparison may not be accurate.
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground ml-2">
+                <li>The product(s) may be very new or not widely analyzed</li>
+                <li>No CVE records exist in the NVD database</li>
+                <li>API services may be temporarily unavailable</li>
+                <li>Try using more specific product names</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Winner Banner */}
-      {winner && (
-        <div className="bg-linear-to-r from-yellow-50 to-yellow-100 border-2 border-yellow-400 rounded-xl p-6 flex items-start gap-4">
+      {winner && !product1HasInsufficientData && !product2HasInsufficientData && (
+        <div className="bg-blue-900 from-yellow-50 to-yellow-100 border-2 border-yellow-400 rounded-xl p-6 flex items-start gap-4">
           <div className="shrink-0 w-12 h-12 bg-yellow-400 text-white rounded-full flex items-center justify-center text-2xl font-bold">
             ★
           </div>
@@ -200,7 +237,7 @@ function ComparisonDisplay({ comparison }) {
       {/* Side-by-Side Comparison */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Product 1 */}
-        <div className="bg-card border border-border rounded-xl p-6 shadow-lg">
+        <div className={`bg-card border rounded-xl p-6 shadow-lg ${product1HasInsufficientData ? 'border-yellow-500/50' : 'border-border'}`}>
           <div className="mb-6">
             <h3 className="text-2xl font-bold mb-2">
               {product1.entity?.product_name || product1.entity?.vendor}
@@ -210,26 +247,45 @@ function ComparisonDisplay({ comparison }) {
                 {product1.entity.vendor}
               </span>
             )}
+            {product1HasInsufficientData && (
+              <div className="mt-2">
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-500/10 border border-yellow-500/30 rounded text-xs text-yellow-600">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  No Data
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-center mb-6">
             <div 
               className="w-32 h-32 rounded-full border-8 flex flex-col items-center justify-center"
-              style={{ borderColor: getScoreColor(product1.trust_score?.total_score || 0) }}
+              style={{ borderColor: product1HasInsufficientData ? '#FBC02D' : getScoreColor(product1.trust_score?.total_score || 0) }}
             >
-              <span 
-                className="text-4xl font-bold"
-                style={{ color: getScoreColor(product1.trust_score?.total_score || 0) }}
-              >
-                {product1.trust_score?.total_score || 0}
-              </span>
-              <span className="text-xs text-muted-foreground">Trust Score</span>
+              {product1HasInsufficientData ? (
+                <>
+                  <span className="text-4xl font-bold text-yellow-500">?</span>
+                  <span className="text-xs text-muted-foreground">No Data</span>
+                </>
+              ) : (
+                <>
+                  <span 
+                    className="text-4xl font-bold"
+                    style={{ color: getScoreColor(product1.trust_score?.total_score || 0) }}
+                  >
+                    {product1.trust_score?.total_score || 0}
+                  </span>
+                  <span className="text-xs text-muted-foreground">Trust Score</span>
+                </>
+              )}
             </div>
           </div>
 
           <div className="space-y-3">
             <MetricItem 
-              label="Total CVEs"
+              label="Total CVEs (max 200)"
               value={product1.security_posture?.total_cves || 0}
             />
             <MetricItem 
@@ -258,7 +314,7 @@ function ComparisonDisplay({ comparison }) {
         </div>
 
         {/* Product 2 */}
-        <div className="bg-card border border-border rounded-xl p-6 shadow-lg">
+        <div className={`bg-card border rounded-xl p-6 shadow-lg ${product2HasInsufficientData ? 'border-yellow-500/50' : 'border-border'}`}>
           <div className="mb-6">
             <h3 className="text-2xl font-bold mb-2">
               {product2.entity?.product_name || product2.entity?.vendor}
@@ -268,26 +324,45 @@ function ComparisonDisplay({ comparison }) {
                 {product2.entity.vendor}
               </span>
             )}
+            {product2HasInsufficientData && (
+              <div className="mt-2">
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-500/10 border border-yellow-500/30 rounded text-xs text-yellow-600">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  No Data
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-center mb-6">
             <div 
               className="w-32 h-32 rounded-full border-8 flex flex-col items-center justify-center"
-              style={{ borderColor: getScoreColor(product2.trust_score?.total_score || 0) }}
+              style={{ borderColor: product2HasInsufficientData ? '#FBC02D' : getScoreColor(product2.trust_score?.total_score || 0) }}
             >
-              <span 
-                className="text-4xl font-bold"
-                style={{ color: getScoreColor(product2.trust_score?.total_score || 0) }}
-              >
-                {product2.trust_score?.total_score || 0}
-              </span>
-              <span className="text-xs text-muted-foreground">Trust Score</span>
+              {product2HasInsufficientData ? (
+                <>
+                  <span className="text-4xl font-bold text-yellow-500">?</span>
+                  <span className="text-xs text-muted-foreground">No Data</span>
+                </>
+              ) : (
+                <>
+                  <span 
+                    className="text-4xl font-bold"
+                    style={{ color: getScoreColor(product2.trust_score?.total_score || 0) }}
+                  >
+                    {product2.trust_score?.total_score || 0}
+                  </span>
+                  <span className="text-xs text-muted-foreground">Trust Score</span>
+                </>
+              )}
             </div>
           </div>
 
           <div className="space-y-3">
             <MetricItem 
-              label="Total CVEs"
+              label="Total CVEs (max 200)"
               value={product2.security_posture?.total_cves || 0}
             />
             <MetricItem 

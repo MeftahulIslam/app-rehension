@@ -34,12 +34,17 @@ function Home({
     <div className="container mx-auto px-4">
       {/* Hero Section */}
       <section className="text-center py-12 mb-8">
-        <h1 className="text-4xl font-bold mb-4">
-          Security Assessment Tool
-        </h1>
-        <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-          Comprehensive security analysis for software products and vendors.
-          Get instant insights on vulnerabilities, trust scores, and safer alternatives.
+        <div className="relative inline-block mb-6">
+          <h1 className="text-6xl md:text-7xl font-black mb-4 bg-gradient-to-r from-purple-400 via-pink-400 to-purple-600 bg-clip-text text-transparent animate-gradient rounded-2xl">
+            App-Rehension
+          </h1>
+          <div className="absolute -inset-1 bg-gradient-to-r from-purple-600 to-pink-600 rounded-full blur opacity-20 "></div>
+        </div>
+        <p className="text-xl md:text-2xl text-gray-300 max-w-3xl mx-auto font-light mb-2">
+          Because trust shouldn't be <span className="text-purple-400 font-semibold">guesswork</span>.
+        </p>
+        <p className="text-sm text-gray-400 max-w-2xl mx-auto">
+          AI-powered security assessments with multi-agent verification • Real-time vulnerability tracking • Trust scoring you can rely on
         </p>
       </section>
 
@@ -82,12 +87,6 @@ function Home({
         <>
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold">Assessment Results</h2>
-            <button
-              onClick={onReset}
-              className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-sm font-medium"
-            >
-              New Assessment
-            </button>
           </div>
           <AssessmentDisplay assessment={assessment} />
         </>
@@ -105,7 +104,7 @@ function Home({
                 </svg>
               </div>
               <h3 className="font-bold mb-2">Vulnerability Analysis</h3>
-              <p className="text-sm text-muted-foreground">Recent CVEs, CVSS scores, and exploited vulnerabilities from CISA KEV</p>
+              <p className="text-sm text-muted-foreground">Recent CVEs (max 200), CVSS scores, and exploited vulnerabilities from CISA KEV</p>
             </div>
             <div className="bg-card border border-border rounded-xl p-6 text-center hover:shadow-lg transition-shadow">
               <div className="w-12 h-12 mx-auto mb-3 bg-primary/10 rounded-full flex items-center justify-center">

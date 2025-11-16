@@ -30,7 +30,7 @@ class Config:
     PRODUCTHUNT_API_BASE = "https://api.producthunt.com/v2/api/graphql"
     
     # LLM Settings
-    GEMINI_MODEL = "gemini-2.0-flash"
+    GEMINI_MODEL = "gemini-2.5-flash"
     GEMINI_TEMPERATURE = 0.1  # Low temperature for consistent, factual responses
     GEMINI_MAX_TOKENS = 4096
     
