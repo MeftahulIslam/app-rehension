@@ -650,3 +650,331 @@ class EPSSAPI:
                 
         except Exception as e:
             return {}
+
+
+class MITREAttackAPI:
+    """
+    Fetch MITRE ATT&CK framework data to map CVEs to attacker techniques and tactics.
+    Uses the mitreattack-python library for access to the ATT&CK STIX data.
+    """
+    
+    def __init__(self):
+        """Initialize MITRE ATT&CK API"""
+        self.base_url = "https://attack.mitre.org"
+        self.stix_url = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
+        self.techniques_cache = None
+        self.tactics_cache = None
+        
+    def _load_attack_data(self) -> Optional[Dict]:
+        """Load MITRE ATT&CK STIX data"""
+        if self.techniques_cache is not None:
+            return self.techniques_cache
+            
+        try:
+            import requests
+            from stix2 import MemoryStore
+            
+            print("Loading MITRE ATT&CK framework data...")
+            response = requests.get(self.stix_url, timeout=30)
+            response.raise_for_status()
+            
+            stix_data = response.json()
+            
+            # Create in-memory STIX store
+            self.store = MemoryStore(stix_data=stix_data.get('objects', []))
+            
+            # Cache techniques and tactics
+            self.techniques_cache = {}
+            self.tactics_cache = {}
+            
+            for obj in stix_data.get('objects', []):
+                if obj.get('type') == 'attack-pattern':
+                    technique_id = None
+                    for ref in obj.get('external_references', []):
+                        if ref.get('source_name') == 'mitre-attack':
+                            technique_id = ref.get('external_id')
+                            break
+                    
+                    if technique_id:
+                        self.techniques_cache[technique_id] = {
+                            'id': technique_id,
+                            'name': obj.get('name'),
+                            'description': obj.get('description', ''),
+                            'tactics': [phase.replace('-', ' ').title() for phase in obj.get('kill_chain_phases', [{}])[0].get('phase_name', '').split(',') if phase] if obj.get('kill_chain_phases') else [],
+                            'url': f"https://attack.mitre.org/techniques/{technique_id.replace('.', '/')}/",
+                            'platforms': obj.get('x_mitre_platforms', []),
+                            'data_sources': obj.get('x_mitre_data_sources', [])
+                        }
+                
+                elif obj.get('type') == 'x-mitre-tactic':
+                    tactic_id = None
+                    for ref in obj.get('external_references', []):
+                        if ref.get('source_name') == 'mitre-attack':
+                            tactic_id = ref.get('external_id')
+                            break
+                    
+                    if tactic_id:
+                        self.tactics_cache[tactic_id] = {
+                            'id': tactic_id,
+                            'name': obj.get('name'),
+                            'description': obj.get('description', ''),
+                            'shortname': obj.get('x_mitre_shortname', '')
+                        }
+            
+            print(f"Loaded {len(self.techniques_cache)} techniques and {len(self.tactics_cache)} tactics")
+            return self.techniques_cache
+            
+        except Exception as e:
+            print(f"Error loading MITRE ATT&CK data: {e}")
+            return None
+    
+    def map_cves_to_techniques(self, cves: List[Dict]) -> Dict[str, Any]:
+        """
+        Map CVEs to MITRE ATT&CK techniques based on CVE descriptions and types.
+        
+        Args:
+            cves: List of CVE dictionaries with descriptions
+            
+        Returns:
+            Dictionary with mapped techniques, tactics, and attack chains
+        """
+        if not self._load_attack_data():
+            return {
+                'available': False,
+                'error': 'Failed to load MITRE ATT&CK data'
+            }
+        
+        # Analyze CVEs and map to techniques
+        technique_mapping = {}
+        tactic_mapping = {}
+        attack_chains = []
+        
+        for cve in cves[:50]:  # Limit to first 50 CVEs for performance
+            cve_id = cve.get('cve_id', '')
+            # Try both 'summary' and 'description' fields
+            description = (cve.get('summary', '') or cve.get('description', '')).lower()
+            
+            # Map based on vulnerability type keywords
+            mapped_techniques = self._map_cve_to_techniques(cve_id, description)
+            
+            for tech in mapped_techniques:
+                tech_id = tech['id']
+                if tech_id not in technique_mapping:
+                    technique_mapping[tech_id] = {
+                        **tech,
+                        'related_cves': []
+                    }
+                technique_mapping[tech_id]['related_cves'].append(cve_id)
+                
+                # Map tactics
+                for tactic in tech.get('tactics', []):
+                    if tactic not in tactic_mapping:
+                        tactic_mapping[tactic] = {
+                            'name': tactic,
+                            'techniques': [],
+                            'cve_count': 0
+                        }
+                    if tech_id not in tactic_mapping[tactic]['techniques']:
+                        tactic_mapping[tactic]['techniques'].append(tech_id)
+                    tactic_mapping[tactic]['cve_count'] += 1
+        
+        # Generate attack chains (kill chain progression)
+        attack_chains = self._generate_attack_chains(technique_mapping)
+        
+        # Calculate statistics
+        total_techniques = len(technique_mapping)
+        total_tactics = len(tactic_mapping)
+        most_common_tactic = max(tactic_mapping.items(), key=lambda x: x[1]['cve_count'])[0] if tactic_mapping else None
+        
+        return {
+            'available': True,
+            'techniques': list(technique_mapping.values()),
+            'tactics': tactic_mapping,
+            'attack_chains': attack_chains,
+            'summary': {
+                'total_techniques': total_techniques,
+                'total_tactics': total_tactics,
+                'most_common_tactic': most_common_tactic,
+                'high_risk_techniques': [t for t in technique_mapping.values() if len(t['related_cves']) >= 3]
+            }
+        }
+    
+    def _map_cve_to_techniques(self, cve_id: str, description: str) -> List[Dict]:
+        """Map a single CVE to MITRE ATT&CK techniques based on keywords"""
+        mapped_techniques = []
+        
+        # Keyword mapping to MITRE ATT&CK techniques
+        keyword_mappings = {
+            # Initial Access
+            'T1190': ['exploit', 'remote code execution', 'rce', 'unauthenticated'],
+            'T1566': ['phishing', 'spearphishing', 'email'],
+            'T1078': ['credential', 'authentication bypass', 'login'],
+            
+            # Execution
+            'T1059': ['command injection', 'code injection', 'script', 'shell'],
+            'T1203': ['exploitation for client execution', 'browser', 'client-side'],
+            'T1204': ['user execution', 'malicious file'],
+            
+            # Persistence
+            'T1136': ['create account', 'add user', 'new account'],
+            'T1053': ['scheduled task', 'cron', 'at command'],
+            'T1098': ['account manipulation', 'privilege escalation'],
+            
+            # Privilege Escalation
+            'T1068': ['privilege escalation', 'elevation of privilege', 'local privilege'],
+            'T1055': ['process injection', 'dll injection'],
+            'T1548': ['abuse elevation control', 'sudo', 'uac bypass'],
+            
+            # Defense Evasion
+            'T1070': ['indicator removal', 'clear logs', 'delete logs'],
+            'T1027': ['obfuscation', 'obfuscated', 'encoded'],
+            'T1222': ['file permissions', 'chmod', 'permission modification'],
+            
+            # Credential Access
+            'T1110': ['brute force', 'password guessing', 'credential stuffing'],
+            'T1555': ['credentials from password stores', 'keychain', 'credential manager'],
+            'T1003': ['credential dumping', 'lsass', 'sam database'],
+            
+            # Discovery
+            'T1083': ['file and directory discovery', 'directory traversal', 'path traversal'],
+            'T1046': ['network service scanning', 'port scan'],
+            'T1082': ['system information discovery'],
+            
+            # Lateral Movement
+            'T1021': ['remote services', 'rdp', 'ssh', 'smb'],
+            'T1550': ['use alternate authentication', 'pass the hash', 'token'],
+            
+            # Collection
+            'T1005': ['data from local system', 'file access'],
+            'T1039': ['data from network shared drive'],
+            'T1074': ['data staged', 'staging'],
+            
+            # Command and Control
+            'T1071': ['application layer protocol', 'http', 'https', 'dns'],
+            'T1573': ['encrypted channel', 'ssl', 'tls'],
+            
+            # Exfiltration
+            'T1041': ['exfiltration over c2', 'data exfiltration'],
+            'T1048': ['exfiltration over alternative protocol'],
+            
+            # Impact
+            'T1485': ['data destruction', 'delete', 'wipe'],
+            'T1486': ['data encrypted for impact', 'ransomware', 'encryption'],
+            'T1499': ['denial of service', 'dos', 'resource exhaustion']
+        }
+        
+        # Check for keyword matches
+        for technique_id, keywords in keyword_mappings.items():
+            for keyword in keywords:
+                if keyword in description:
+                    if technique_id in self.techniques_cache:
+                        technique = self.techniques_cache[technique_id].copy()
+                        technique['match_reason'] = f"Matched keyword: '{keyword}'"
+                        mapped_techniques.append(technique)
+                    break
+        
+        # If no techniques matched, assign generic ones based on CVE severity
+        if not mapped_techniques and 'remote code execution' in description:
+            if 'T1190' in self.techniques_cache:
+                technique = self.techniques_cache['T1190'].copy()
+                technique['match_reason'] = "Default: Remote code execution vulnerability"
+                mapped_techniques.append(technique)
+        
+        return mapped_techniques
+    
+    def _generate_attack_chains(self, technique_mapping: Dict) -> List[Dict]:
+        """Generate potential attack chains based on mapped techniques"""
+        
+        # Define kill chain order
+        kill_chain_order = [
+            'Initial Access',
+            'Execution',
+            'Persistence',
+            'Privilege Escalation',
+            'Defense Evasion',
+            'Credential Access',
+            'Discovery',
+            'Lateral Movement',
+            'Collection',
+            'Command And Control',
+            'Exfiltration',
+            'Impact'
+        ]
+        
+        # Group techniques by tactic
+        tactics_to_techniques = {}
+        for tech in technique_mapping.values():
+            for tactic in tech.get('tactics', []):
+                if tactic not in tactics_to_techniques:
+                    tactics_to_techniques[tactic] = []
+                tactics_to_techniques[tactic].append(tech)
+        
+        # Generate attack chains
+        chains = []
+        
+        # Create primary chain (most complete path)
+        primary_chain = {
+            'name': 'Primary Attack Path',
+            'description': 'Most likely attack progression based on available techniques',
+            'steps': []
+        }
+        
+        for tactic in kill_chain_order:
+            if tactic in tactics_to_techniques:
+                # Pick technique with most CVEs
+                best_technique = max(tactics_to_techniques[tactic], 
+                                    key=lambda t: len(t.get('related_cves', [])))
+                primary_chain['steps'].append({
+                    'tactic': tactic,
+                    'technique_id': best_technique['id'],
+                    'technique_name': best_technique['name'],
+                    'cve_count': len(best_technique.get('related_cves', []))
+                })
+        
+        if primary_chain['steps']:
+            chains.append(primary_chain)
+        
+        return chains
+    
+    def get_attack_matrix(self, techniques: List[Dict]) -> Dict[str, Any]:
+        """
+        Generate MITRE ATT&CK matrix visualization data.
+        
+        Args:
+            techniques: List of mapped techniques
+            
+        Returns:
+            Matrix data structure for frontend visualization
+        """
+        matrix = {
+            'tactics': [],
+            'techniques_by_tactic': {}
+        }
+        
+        # Define tactic order
+        tactic_order = [
+            'Initial Access', 'Execution', 'Persistence', 'Privilege Escalation',
+            'Defense Evasion', 'Credential Access', 'Discovery', 'Lateral Movement',
+            'Collection', 'Command And Control', 'Exfiltration', 'Impact'
+        ]
+        
+        # Organize techniques by tactic
+        for tactic in tactic_order:
+            matrix['techniques_by_tactic'][tactic] = []
+        
+        for tech in techniques:
+            for tactic in tech.get('tactics', []):
+                if tactic in matrix['techniques_by_tactic']:
+                    matrix['techniques_by_tactic'][tactic].append({
+                        'id': tech['id'],
+                        'name': tech['name'],
+                        'cve_count': len(tech.get('related_cves', [])),
+                        'url': tech.get('url')
+                    })
+        
+        # Add tactics with techniques
+        for tactic in tactic_order:
+            if matrix['techniques_by_tactic'][tactic]:
+                matrix['tactics'].append(tactic)
+        
+        return matrix

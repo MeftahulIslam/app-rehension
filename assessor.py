@@ -4,7 +4,7 @@ Core assessment engine that orchestrates data gathering and analysis
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 
-from data_sources import ProductHuntAPI, NVDAPI, CISAKEVAPI, VirusTotalAPI, EPSSAPI
+from data_sources import ProductHuntAPI, NVDAPI, CISAKEVAPI, VirusTotalAPI, EPSSAPI, MITREAttackAPI
 from llm_analyzer import GeminiAnalyzer
 from multi_agent_analyzer import MultiAgentAnalyzer
 from cache import JSONCache
@@ -24,6 +24,9 @@ class SecurityAssessor:
         self.cisa_kev = CISAKEVAPI()
         self.epss = EPSSAPI()
         self.virustotal = VirusTotalAPI(config.VIRUSTOTAL_API_KEY) if config.VIRUSTOTAL_API_KEY else None
+        self.mitre_attack = MITREAttackAPI()
+        
+        print("✓ MITRE ATT&CK Framework initialized")
         
         # Initialize analyzer based on configuration
         self.use_multi_agent = config.USE_MULTI_AGENT
@@ -696,9 +699,26 @@ class SecurityAssessor:
         except Exception as e:
             pass
         
+        # Gather MITRE ATT&CK mapping
+        mitre_attack = None
+        try:
+            cache_key = f"mitre_attack_{vendor}_{product or 'all'}"
+            cached_attack = self.cache.get_raw_data(cache_key)
+            
+            if cached_attack:
+                mitre_attack = cached_attack
+            else:
+                if cves:  # Only map if we have CVEs
+                    mitre_attack = self.mitre_attack.map_cves_to_techniques(cves)
+                    if mitre_attack and mitre_attack.get('available'):
+                        self.cache.save_raw_data(cache_key, "mitre_attack", mitre_attack, expiry_hours=168)  # 7 days
+        except Exception as e:
+            print(f"MITRE ATT&CK mapping error: {e}")
+        
         return {
             'cves': cves,
-            'kevs': kevs
+            'kevs': kevs,
+            'mitre_attack': mitre_attack
         }
     
     def _aggregate_cves_by_year(self, cves: list) -> Dict[str, int]:
@@ -883,6 +903,20 @@ class SecurityAssessor:
                 'source_url': virustotal_data.get('source_url')
             }
         
+        # Add MITRE ATT&CK data if available
+        if security_data.get('mitre_attack') and security_data['mitre_attack'].get('available'):
+            mitre_data = security_data['mitre_attack']
+            attack_matrix = self.mitre_attack.get_attack_matrix(mitre_data.get('techniques', []))
+            
+            assessment['mitre_attack'] = {
+                'available': True,
+                'techniques': mitre_data.get('techniques', []),
+                'tactics': mitre_data.get('tactics', {}),
+                'attack_chains': mitre_data.get('attack_chains', []),
+                'attack_matrix': attack_matrix,
+                'summary': mitre_data.get('summary', {})
+            }
+        
         return assessment
     
     def _compile_sources(self, product_data: Optional[Dict], security_data: Dict, virustotal_data: Optional[Dict] = None) -> list:
@@ -922,6 +956,18 @@ class SecurityAssessor:
                 'type': 'Known Exploited Vulnerabilities',
                 'url': 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog',
                 'count': len(security_data['kevs']),
+                'timestamp': datetime.now().isoformat()
+            })
+        
+        # Add MITRE ATT&CK if available
+        if security_data.get('mitre_attack') and security_data['mitre_attack'].get('available'):
+            mitre_data = security_data['mitre_attack']
+            sources.append({
+                'name': 'MITRE ATT&CK Framework',
+                'type': 'Attack Techniques & Tactics',
+                'url': 'https://attack.mitre.org',
+                'count': mitre_data.get('summary', {}).get('total_techniques', 0),
+                'description': f"{mitre_data.get('summary', {}).get('total_techniques', 0)} techniques across {mitre_data.get('summary', {}).get('total_tactics', 0)} tactics",
                 'timestamp': datetime.now().isoformat()
             })
         

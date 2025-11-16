@@ -12,3 +12,5 @@ langgraph
 SQLAlchemy
 gunicorn
 langgraph
+mitreattack-python
+stix2
