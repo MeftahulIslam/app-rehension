@@ -7,7 +7,7 @@ from datetime import datetime
 from data_sources import ProductHuntAPI, NVDAPI, CISAKEVAPI, VirusTotalAPI, EPSSAPI
 from llm_analyzer import GeminiAnalyzer
 from multi_agent_analyzer import MultiAgentAnalyzer
-from database import AssessmentCache
+from cache import JSONCache
 from evidence import EvidenceRegistry
 from trust_scorer import TrustScorer
 from virustotal_trust_scorer import VirusTotalTrustScorer
@@ -37,7 +37,7 @@ class SecurityAssessor:
             self.analyzer = GeminiAnalyzer(config.GEMINI_API_KEY, config.GEMINI_MODEL)
             self.multi_agent = None
         
-        self.cache = AssessmentCache(config.DATABASE_PATH)
+        self.cache = JSONCache(config.DATABASE_PATH)
         self.trust_scorer = TrustScorer()
         self.virustotal_trust_scorer = VirusTotalTrustScorer()
 
@@ -58,17 +58,13 @@ class SecurityAssessor:
         """
 
         normalized_search_term = search_term or input_text
-        
-        logger.info(f"[CACHE] assess_product called: input_text='{input_text}', search_term='{search_term}', use_cache={use_cache}")
 
         if use_cache and normalized_search_term:
-            logger.info("[CACHE] Checking cache before API calls...")
             cached_query_result = self.cache.get_assessment_by_query(
                 normalized_search_term,
                 max_age_hours=self.config.CACHE_EXPIRY_HOURS
             )
             if cached_query_result:
-                logger.info(f"[CACHE] ✓ HIT - Returning cached result for '{normalized_search_term}'")
                 if progress_callback:
                     progress_callback({
                         "stage": "cache",
@@ -76,13 +72,6 @@ class SecurityAssessor:
                         "details": "Returning cached assessment for this search"
                     })
                 return cached_query_result
-            else:
-                logger.info(f"[CACHE] ✗ MISS - Will perform full assessment for '{normalized_search_term}'")
-
-        if virustotal_data:
-
-            logger.info(f"  File: {virustotal_data.get('primary_name', 'Unknown')}")
-            logger.info(f"  Detection: {virustotal_data.get('detection_ratio', 'N/A')}")
         
         # Notify initial progress
         if progress_callback:
@@ -435,7 +424,6 @@ class SecurityAssessor:
         vendor = entity_info.get('vendor')
         cache_query = search_term or input_text
 
-        logger.info(f"[CACHE] Saving assessment for query: '{cache_query}'")
         self.cache.save_assessment(
             product_name=product_name,
             assessment_data=assessment,
@@ -584,7 +572,6 @@ class SecurityAssessor:
         vendor = entity_info.get('vendor')
         cache_query = search_term or input_text
 
-        logger.info(f"[CACHE] Saving assessment for query: '{cache_query}'")
         self.cache.save_assessment(
             product_name=product_name,
             assessment_data=assessment,

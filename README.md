@@ -251,7 +251,7 @@ hackathon_project/
 ├── assessor.py           # Core assessment engine
 ├── llm_analyzer.py       # Gemini LLM integration
 ├── data_sources.py       # API integrations (ProductHunt, OpenCVE, CISA)
-├── database.py           # JSON caching layer
+├── cache.py              # JSON-based caching layer
 ├── config.py             # Configuration management
 ├── requirements.txt      # Python dependencies
 ├── .env.example         # Environment variables template

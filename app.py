@@ -60,8 +60,12 @@ def assess():
         # Get input
         data = request.get_json() if request.is_json else request.form
         input_text = data.get('input_text', '').strip()
-        use_cache = data.get('use_cache', 'true') == 'true'
+        use_cache_raw = data.get('use_cache', True)
+        # Handle both boolean and string values
+        use_cache = use_cache_raw if isinstance(use_cache_raw, bool) else str(use_cache_raw).lower() == 'true'
         session_id = data.get('session_id', str(datetime.now().timestamp()))
+        
+        print(f"\n[REQUEST] input_text='{input_text}', use_cache={use_cache} (type: {type(use_cache_raw)})")
         
         if not input_text:
             return jsonify({'error': 'Please provide a product name, vendor, SHA1 hash, or URL'}), 400
@@ -115,20 +119,14 @@ def assess():
         # CHECK CACHE FIRST - Before spawning any threads or doing work
         # ============================================================
         if use_cache:
-            logger.info(f"[CACHE] ========================================")
-            logger.info(f"[CACHE] use_cache={use_cache}, input_text='{input_text}'")
-            logger.info(f"[CACHE] Cache path: {assessor.cache.cache_path}")
-            logger.info(f"[CACHE] Cache expiry hours: {Config.CACHE_EXPIRY_HOURS}")
-            
+            print(f"\n[CACHE CHECK] Searching for: '{input_text}'")
             cached_result = assessor.cache.get_assessment_by_query(
                 input_text,
                 max_age_hours=Config.CACHE_EXPIRY_HOURS
             )
             
-            logger.info(f"[CACHE] Result: {cached_result is not None}")
-            
             if cached_result:
-                logger.info(f"[CACHE] ✓✓✓ HIT - Returning cached result immediately ✓✓✓")
+                print(f"[CACHE HIT] ✓ Found cached result for '{input_text}'")
                 # Add input metadata to cached result
                 cached_result['_input_metadata'] = {
                     'raw_input': input_text,
@@ -148,8 +146,7 @@ def assess():
                     'assessment': cached_result
                 })
             else:
-                logger.info(f"[CACHE] ✗✗✗ MISS - Will perform full assessment ✗✗✗")
-                logger.info(f"[CACHE] ========================================")
+                print(f"[CACHE MISS] ✗ No cached result for '{input_text}'")
         
         # Create progress queue for this session
         progress_queue = queue.Queue()
@@ -279,18 +276,52 @@ def get_result(session_id):
 
 @app.route('/api/history')
 def history():
-    """View assessment history"""
+    """Get assessment history as JSON"""
     
     if not assessor:
-        return render_template('error.html', 
-                             error='Assessment service is not available.')
+        return jsonify({
+            'error': 'Assessment service is not available.'
+        }), 503
     
     try:
         assessments = assessor.get_assessment_history(limit=100)
-        return render_template('history.html', assessments=assessments)
+        return jsonify({
+            'success': True,
+            'assessments': assessments
+        })
         
     except Exception as e:
-        return render_template('error.html', error=str(e))
+        return jsonify({
+            'error': f'Failed to retrieve history: {str(e)}'
+        }), 500
+
+@app.route('/api/assessment/<int:assessment_id>')
+def get_assessment_api(assessment_id):
+    """Get a specific cached assessment by ID as JSON"""
+    
+    if not assessor:
+        return jsonify({
+            'error': 'Assessment service is not available.'
+        }), 503
+    
+    try:
+        # Get the specific assessment from cache
+        assessment = assessor.get_assessment_by_id(assessment_id)
+        
+        if not assessment:
+            return jsonify({
+                'error': f'Assessment #{assessment_id} not found.'
+            }), 404
+        
+        return jsonify({
+            'success': True,
+            'assessment': assessment
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': f'Failed to retrieve assessment: {str(e)}'
+        }), 500
 
 @app.route('/assessment/<int:assessment_id>')
 def view_assessment(assessment_id):
@@ -314,13 +345,115 @@ def view_assessment(assessment_id):
                              show_cached=True)
         
     except Exception as e:
-        logger.error(f"Error fetching assessment {assessment_id}: {e}")
         return render_template('error.html', error=str(e))
 
 @app.route('/compare')
 def compare():
     """Compare multiple products"""
     return render_template('compare.html')
+
+@app.route('/api/compare', methods=['POST'])
+def api_compare():
+    """Compare two products and return comparison data"""
+    try:
+        data = request.get_json()
+        product1 = data.get('product1', '').strip()
+        product2 = data.get('product2', '').strip()
+        
+        if not product1 or not product2:
+            return jsonify({'error': 'Both product1 and product2 are required'}), 400
+        
+        if product1.lower() == product2.lower():
+            return jsonify({'error': 'Please provide two different products to compare'}), 400
+        
+        print(f"[COMPARE] Comparing: '{product1}' vs '{product2}'")
+        
+        # Assess both products
+        assessment1 = assessor.assess_product(product1)
+        assessment2 = assessor.assess_product(product2)
+        
+        # Add input metadata
+        assessment1['_input_metadata'] = {
+            'raw_input': product1,
+            'parsed_type': 'product_name',
+            'detected_product': product1
+        }
+        assessment2['_input_metadata'] = {
+            'raw_input': product2,
+            'parsed_type': 'product_name',
+            'detected_product': product2
+        }
+        
+        # Extract trust scores
+        trust_score_1 = assessment1.get('trust_score', {}).get('overall_score', 0)
+        trust_score_2 = assessment2.get('trust_score', {}).get('overall_score', 0)
+        
+        # Extract CVE counts
+        cve_count_1 = len(assessment1.get('security_posture', {}).get('vulnerabilities', {}).get('cve_list', []))
+        cve_count_2 = len(assessment2.get('security_posture', {}).get('vulnerabilities', {}).get('cve_list', []))
+        
+        # Extract KEV counts
+        kev_count_1 = len(assessment1.get('security_posture', {}).get('vulnerabilities', {}).get('kev_list', []))
+        kev_count_2 = len(assessment2.get('security_posture', {}).get('vulnerabilities', {}).get('kev_list', []))
+        
+        # Calculate comparison metrics
+        comparison_metrics = {
+            'trust_score': {
+                'product1': trust_score_1,
+                'product2': trust_score_2,
+                'difference': round(trust_score_1 - trust_score_2, 2)
+            },
+            'cve_count': {
+                'product1': cve_count_1,
+                'product2': cve_count_2,
+                'difference': cve_count_1 - cve_count_2
+            },
+            'kev_count': {
+                'product1': kev_count_1,
+                'product2': kev_count_2,
+                'difference': kev_count_1 - kev_count_2
+            }
+        }
+        
+        # Generate recommendation
+        recommendation = None
+        if trust_score_1 != trust_score_2:
+            winner = product1 if trust_score_1 > trust_score_2 else product2
+            winner_score = max(trust_score_1, trust_score_2)
+            loser_score = min(trust_score_1, trust_score_2)
+            score_diff = abs(trust_score_1 - trust_score_2)
+            
+            reasons = []
+            reasons.append(f"Higher trust score ({winner_score:.1f} vs {loser_score:.1f})")
+            
+            if trust_score_1 > trust_score_2:
+                if cve_count_1 < cve_count_2:
+                    reasons.append(f"Fewer CVEs ({cve_count_1} vs {cve_count_2})")
+                if kev_count_1 < kev_count_2:
+                    reasons.append(f"Fewer KEV exploits ({kev_count_1} vs {kev_count_2})")
+            else:
+                if cve_count_2 < cve_count_1:
+                    reasons.append(f"Fewer CVEs ({cve_count_2} vs {cve_count_1})")
+                if kev_count_2 < kev_count_1:
+                    reasons.append(f"Fewer KEV exploits ({kev_count_2} vs {kev_count_1})")
+            
+            recommendation = {
+                'product': winner,
+                'reason': ' • '.join(reasons) if reasons else f"Better overall security assessment"
+            }
+        
+        print(f"[COMPARE] Winner: {recommendation['product'] if recommendation else 'Tie'}")
+        
+        return jsonify({
+            'product1': assessment1,
+            'product2': assessment2,
+            'recommendation': recommendation,
+            'comparison_metrics': comparison_metrics
+        })
+        
+    except Exception as e:
+        print(f"[COMPARE ERROR] {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/health')
 def health():

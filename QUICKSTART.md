@@ -137,7 +137,7 @@ hackathon_project/
 ├── assessor.py         # Main assessment engine
 ├── llm_analyzer.py     # Gemini LLM integration
 ├── data_sources.py     # API clients
-├── database.py         # JSON caching
+├── cache.py            # JSON-based caching
 ├── config.py           # Configuration
 ├── templates/          # HTML templates
 └── data/              # JSON cache file (auto-created)
