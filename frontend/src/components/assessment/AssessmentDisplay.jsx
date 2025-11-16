@@ -48,6 +48,9 @@ function AssessmentDisplay({ assessment }) {
 
   console.log('isVirusTotalAssessment:', isVirusTotalAssessment);
 
+  // Check if this result is from cache
+  const isFromCache = assessment._input_metadata?._from_cache || assessment.metadata?.from_cache;
+
   const handleCardToggle = (cardKey) => {
     setOpenCard(openCard === cardKey ? null : cardKey);
   };
@@ -59,6 +62,18 @@ function AssessmentDisplay({ assessment }) {
 
   return (
     <div className="space-y-4">
+      {/* Cache Indicator Badge */}
+      {isFromCache && (
+        <div className="flex justify-end">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-500/10 border border-green-500/30 rounded-lg text-green-600 text-sm">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            <span className="font-medium">Loaded from cache</span>
+          </div>
+        </div>
+      )}
+
       {/* Compact Entity Header */}
       <CompactEntityHeader entity={entity} classification={classification} score={score} />
 

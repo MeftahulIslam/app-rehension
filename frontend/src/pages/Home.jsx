@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import AssessmentForm from '../components/assessment/AssessmentForm';
 import AssessmentDisplay from '../components/assessment/AssessmentDisplay';
 import ProgressTracker from '../components/progress/ProgressTracker';
@@ -13,6 +14,22 @@ function Home({
   onAssessmentError, 
   onReset 
 }) {
+  // Check for cached assessment from history when component mounts
+  useEffect(() => {
+    const cachedAssessment = sessionStorage.getItem('viewAssessment');
+    if (cachedAssessment) {
+      try {
+        const parsedAssessment = JSON.parse(cachedAssessment);
+        onAssessmentComplete(parsedAssessment);
+        // Clear from sessionStorage after loading
+        sessionStorage.removeItem('viewAssessment');
+      } catch (err) {
+        console.error('Failed to parse cached assessment:', err);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount - onAssessmentComplete is stable
+
   return (
     <div className="container mx-auto px-4">
       {/* Hero Section */}
@@ -65,6 +82,12 @@ function Home({
         <>
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold">Assessment Results</h2>
+            <button
+              onClick={onReset}
+              className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-sm font-medium"
+            >
+              New Assessment
+            </button>
           </div>
           <AssessmentDisplay assessment={assessment} />
         </>

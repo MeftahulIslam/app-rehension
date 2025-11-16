@@ -43,8 +43,19 @@ function AssessmentForm({ onStart, onComplete, onError }) {
         return;
       }
 
+      // Check if result was returned from cache immediately
+      if (result.cached && result.assessment) {
+        // Cached result - display immediately
+        console.log('✓ Assessment loaded from cache - no API calls made!');
+        onComplete(result.assessment);
+        setInputText(''); // Clear form
+        setIsSubmitting(false);
+        return;
+      }
+
       // Success - notify parent that assessment has started
       // Don't call onComplete here - let ProgressTracker handle it
+      console.log('→ Assessment started - fetching fresh data from APIs...');
       onStart(sessionId);
       setInputText(''); // Clear form
       setIsSubmitting(false);

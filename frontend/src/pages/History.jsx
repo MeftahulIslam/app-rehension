@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { assessmentAPI } from '../services/api';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 function History() {
+  const navigate = useNavigate();
   const [assessments, setAssessments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -16,7 +17,8 @@ function History() {
     try {
       setLoading(true);
       const data = await assessmentAPI.getHistory();
-      setAssessments(data.history || []);
+      // Backend returns { success: true, assessments: [...] }
+      setAssessments(data.assessments || []);
       setError(null);
     } catch (err) {
       console.error('Failed to load history:', err);
@@ -40,10 +42,18 @@ function History() {
     }
   };
 
-  const handleView = (assessment) => {
-    // Store assessment in sessionStorage and navigate to home
-    sessionStorage.setItem('viewAssessment', JSON.stringify(assessment));
-    window.location.href = '/';
+  const handleView = async (assessmentMeta) => {
+    try {
+      // Fetch the full assessment data by ID
+      const response = await assessmentAPI.getAssessmentById(assessmentMeta.id);
+      if (response.success && response.assessment) {
+        // Store assessment in sessionStorage and navigate to home
+        sessionStorage.setItem('viewAssessment', JSON.stringify(response.assessment));
+        navigate('/');
+      }
+    } catch (err) {
+      alert('Failed to load assessment details: ' + (err.message || 'Unknown error'));
+    }
   };
 
   const getRiskLevel = (score) => {
@@ -57,7 +67,7 @@ function History() {
     if (filter === 'all') return assessments;
     
     return assessments.filter(assessment => {
-      const score = assessment.trust_score?.total_score || 0;
+      const score = assessment.trust_score || 0;
       if (filter === 'high-risk') return score < 60;
       if (filter === 'low-risk') return score >= 60;
       return true;
@@ -124,7 +134,7 @@ function History() {
                   }`}
                   onClick={() => setFilter('high-risk')}
                 >
-                  High Risk ({assessments.filter(a => (a.trust_score?.total_score || 0) < 60).length})
+                  High Risk ({assessments.filter(a => (a.trust_score || 0) < 60).length})
                 </button>
                 <button
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -134,7 +144,7 @@ function History() {
                   }`}
                   onClick={() => setFilter('low-risk')}
                 >
-                  Low Risk ({assessments.filter(a => (a.trust_score?.total_score || 0) >= 60).length})
+                  Low Risk ({assessments.filter(a => (a.trust_score || 0) >= 60).length})
                 </button>
               </div>
               <button 
@@ -169,12 +179,11 @@ function History() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredAssessments.map((assessment) => {
-                  const score = assessment.trust_score?.total_score || 0;
+                  const score = assessment.trust_score || 0;
                   const risk = getRiskLevel(score);
-                  const productName = assessment.entity?.product_name || assessment.entity?.vendor || 'Unknown';
-                  const cveCount = assessment.security_posture?.total_cves || 0;
-                  const kevCount = assessment.security_posture?.kev_count || 0;
-                  const timestamp = new Date(assessment.timestamp || Date.now()).toLocaleString();
+                  const productName = assessment.product_name || assessment.vendor || 'Unknown';
+                  const vendor = assessment.vendor;
+                  const timestamp = new Date(assessment.updated_at || assessment.created_at || Date.now()).toLocaleString();
 
                   return (
                     <div key={assessment.id} className="bg-card border border-border rounded-xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow">
@@ -182,9 +191,9 @@ function History() {
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex-1 min-w-0">
                             <h3 className="font-bold text-lg truncate">{productName}</h3>
-                            {assessment.entity?.vendor && assessment.entity.vendor !== productName && (
+                            {vendor && vendor !== productName && (
                               <span className="inline-block px-2 py-1 bg-secondary text-secondary-foreground rounded text-xs mt-1">
-                                {assessment.entity.vendor}
+                                {vendor}
                               </span>
                             )}
                           </div>
@@ -212,17 +221,9 @@ function History() {
                             </span>
                             <span className="text-[10px] text-muted-foreground">Trust</span>
                           </div>
-                          <div className="flex-1 grid grid-cols-2 gap-2">
-                            <div className="bg-secondary/30 rounded p-2 text-center">
-                              <div className="text-xs text-muted-foreground mb-1">CVEs</div>
-                              <div className="text-lg font-bold">{cveCount}</div>
-                            </div>
-                            {kevCount > 0 && (
-                              <div className="bg-red-50 border border-red-200 rounded p-2 text-center">
-                                <div className="text-xs text-red-600 mb-1">Exploited</div>
-                                <div className="text-lg font-bold text-red-600">{kevCount}</div>
-                              </div>
-                            )}
+                          <div className="flex-1 text-center">
+                            <div className="text-xs text-muted-foreground mb-1">Assessment ID</div>
+                            <div className="text-lg font-bold">#{assessment.id}</div>
                           </div>
                         </div>
 
@@ -233,12 +234,16 @@ function History() {
                             </svg>
                             <span>{timestamp}</span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                            </svg>
-                            <span>{assessment.classification?.category || 'Uncategorized'}</span>
-                          </div>
+                          {assessment.url && (
+                            <div className="flex items-center gap-2">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                              </svg>
+                              <a href={assessment.url} target="_blank" rel="noopener noreferrer" className="hover:underline truncate">
+                                {assessment.url.replace(/^https?:\/\//, '').substring(0, 30)}...
+                              </a>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -252,8 +257,11 @@ function History() {
                         <button 
                           onClick={() => handleDelete(assessment.id)}
                           className="px-4 py-2 bg-destructive/10 text-destructive rounded-lg hover:bg-destructive/20 transition-colors text-sm font-medium"
+                          title="Delete assessment"
                         >
-                          Delete
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
                         </button>
                       </div>
                     </div>
