@@ -355,12 +355,17 @@ def server_error(e):
     logger.error(f"Server error: {e}")
     return render_template('error.html', error='Internal server error'), 500
 
+import os
+
 if __name__ == '__main__':
     if not Config.GEMINI_API_KEY:
         logger.warning("GEMINI_API_KEY not set! Please configure in .env file")
     
+    # Get port from environment variable or default to 5000
+    port = int(os.environ.get('PORT', 5000))
+    
     app.run(
         host='0.0.0.0',
-        port=5000,
+        port=port,
         debug=Config.DEBUG
     )
