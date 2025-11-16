@@ -1,7 +1,7 @@
 """
 Flask web application for Security Assessor
 """
-from flask import Flask, render_template, request, jsonify, redirect, url_for, Response
+from flask import Flask, render_template, request, jsonify, redirect, url_for, Response, send_from_directory
 from flask_cors import CORS
 import json
 import queue
@@ -14,8 +14,18 @@ from assessor import SecurityAssessor
 from input_parser import InputParser
 from data_sources import VirusTotalAPI
 
+# Check if we're serving the built frontend or using templates
+frontend_build_dir = os.path.join(os.path.dirname(__file__), 'frontend', 'dist')
+use_react_frontend = os.path.exists(frontend_build_dir)
+
 # Initialize Flask app
-app = Flask(__name__)
+if use_react_frontend:
+    # Serve the React build
+    app = Flask(__name__, static_folder='frontend/dist', static_url_path='')
+else:
+    # Use traditional templates
+    app = Flask(__name__)
+
 CORS(app, resources={
     r"/api/*": {"origins": ["http://localhost:5173", "http://localhost:5000"]}
 })
@@ -45,6 +55,8 @@ completed_results = {}
 @app.route('/')
 def index():
     """Home page"""
+    if use_react_frontend:
+        return send_from_directory(app.static_folder, 'index.html')
     return render_template('index.html')
 
 @app.route('/api/assess', methods=['POST'])
@@ -474,12 +486,16 @@ def health():
 
 @app.errorhandler(404)
 def not_found(e):
-    """404 error handler"""
+    """404 error handler - serve React app for client-side routing"""
+    if use_react_frontend and not request.path.startswith('/api'):
+        return send_from_directory(app.static_folder, 'index.html')
     return render_template('error.html', error='Page not found'), 404
 
 @app.errorhandler(500)
 def server_error(e):
     """500 error handler"""
+    if use_react_frontend:
+        return jsonify({'error': 'Internal server error'}), 500
     return render_template('error.html', error='Internal server error'), 500
 
 if __name__ == '__main__':
